@@ -2,7 +2,7 @@ import taichi as ti
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 1  # Use a larger value for higher-res simulations
+quality = 2  # Use a larger value for higher-res simulations
 n_particles, n_grid = 9000 * quality**2, 128 * quality
 dx, inv_dx = 1 / n_grid, float(n_grid)
 dt = 1e-4 / quality
