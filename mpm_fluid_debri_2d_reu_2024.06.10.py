@@ -1,4 +1,5 @@
 import taichi as ti
+import numpy as np
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
@@ -10,6 +11,10 @@ p_vol, p_rho = (dx * 0.5) ** 2, 1
 p_mass = p_vol * p_rho
 E, nu = 5e3, 0.2  # Young's modulus and Poisson's ratio
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
+time_delta = 1.0 / 20.0
+
+boundary_color = 0xEBACA2
+board_states = ti.Vector.field(2, float)
 
 x = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
 v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
@@ -22,6 +27,7 @@ grid_m = ti.field(dtype=float, shape=(n_grid, n_grid))  # grid node mass
 gravity = ti.Vector.field(2, dtype=float, shape=())
 attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(2, dtype=float, shape=())
+ti.root.place(board_states)
 
 
 @ti.kernel
@@ -29,6 +35,9 @@ def substep():
     for i, j in grid_m:
         grid_v[i, j] = [0, 0]
         grid_m[i, j] = 0
+    for p in x:
+        if x[p][0] < 0.05:  # Adjust the threshold as needed
+            v[p][0] += 1000 * dt  # Adjust the force strength as needed
     for p in x:  # Particle state update and scatter to grid (P2G)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
@@ -101,6 +110,17 @@ def substep():
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
 
+@ti.kernel
+def move_board():
+    # probably more accurate to exert force on particles according to hooke's law.
+    b = board_states[None]
+    b[1] += 1.0
+    period = 90
+    vel_strength = 8.0
+    if b[1] >= 2 * period:
+        b[1] = 0
+    b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
+    board_states[None] = b
 
 @ti.kernel
 def reset():
@@ -131,11 +151,22 @@ for frame in range(20000):
 
     for s in range(int(2e-3 // dt)):
         substep()
+        move_board()
     gui.circles(
         x.to_numpy(),
         radius=1.5,
         palette=[0x068587, 0xED553B, 0xEEEEF0],
         palette_indices=material,
+    )
+     # Render the moving border
+    border_pos = board_states[None][0]
+    border_width = 0.1  # Adjust the width of the border as needed
+    # Render the boundary
+    gui.rect(
+        (0, 0),
+        (board_states[None][0], 1),
+        radius=1.5,
+        color=boundary_color
     )
 
     # Change to gui.show(f'{frame:06d}.png') to write images to disk
