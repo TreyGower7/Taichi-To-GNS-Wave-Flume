@@ -46,7 +46,7 @@ def substep():
         # Hardening coefficient: snow gets harder when compressed
         h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p]))))
         if material[p] == 1:  # jelly, make it softer
-            h = 0.3
+            h = 1
         mu, la = mu_0 * h, lambda_0 * h
         if material[p] == 0:  # liquid
             mu = 0.0
@@ -108,21 +108,71 @@ def substep():
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
         
+     # Apply boundary collisions
+        if x[p][1] < 0.1:  # Lower boundary
+            x[p][1] = 0.1
+            if v[p][1] < 0:
+                v[p][1] = 0  # Stop downward velocity
 
+        if x[p][1] > 0.2:  # Upper boundary
+            x[p][1] = 0.2
+            if v[p][1] > 0:
+                v[p][1] = 0  # Stop upward velocity
+                
+    # Piston Collisions
+    for p in x:
+        if x[p][0] < 0.05:  # Adjust the threshold as needed
+            v[p][0] += 1 * dt  # Adjust the force strength as needed
+        # Apply piston force based on Hooke's law
+        piston_pos = board_states[None][0]
+        if x[p][0] < piston_pos:
+            displacement = piston_pos - x[p][0]
+            force = 1 * displacement  # Hooke's law: F = k * x
+            v[p][0] += force * dt / p_mass  # Apply the force to the velocity
+        
+@ti.kernel
+def move_board():
+    b = board_states[None]
+    b[1] += 1.0
+    period = 90
+    vel_strength = 2.0
+    damping = 0.9  # Damping factor to reduce oscillations
+    if b[1] >= 2 * period:
+        b[1] = 0
+    # Update the piston position with damping
+    b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta * damping
+    # Ensure the piston stays within the boundaries
+    b[0] = ti.max(0, ti.min(b[0], 0.09))
+    board_states[None] = b
+    
 @ti.kernel
 def reset():
     group_size = n_particles // 2
     for i in range(n_particles):
-        x[i] = [
-            ti.random() * 0.2 + 0.3 + 0.10 * (i // group_size),
-            ti.random() * 0.2 + 0.05 + 0.32 * (i // group_size),
-        ]
-        material[i] = min(i // group_size, 1)  # 0: fluid 1: jelly 2: snow
-        v[i] = [0, 0]
+        if i < group_size:
+            x[i] = [
+                ti.random() * 0.4 + 0.01,  # Fluid particles are spread over a wider x-range
+                ti.random() * 0.4 + 0.01   # Fluid particles are spread over a wider y-range
+            ]
+            material[i] = 0  # fluid
+        else:
+            x[i] = [
+                ti.random() * 0.02 + 0.2,  # Block particles are confined to a smaller x-range
+                ti.random() * 0.12 + 0.12     # Block particles are confined to a smaller y-range
+            ]
+            material[i] = 1  # jelly
+        #x[i] = [
+        #    ti.random() * 0.2 + 0.1 + 0.4 * (i // group_size),
+        #    ti.random() * 0.2 + 0.02 + 0.02 * (i // group_size),
+        #]
+        #material[i] = min(i // group_size, 1)  # 0: fluid 1: jelly 2: snow
+        v[i] = [1, 1]
         F[i] = ti.Matrix([[1, 0], [0, 1]])
         Jp[i] = 1
         C[i] = ti.Matrix.zero(float, 2, 2)
+    board_states[None] = [0.02, 0]  # Initial piston position
 
+j =0
 print("Press R to reset.")
 gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
 reset()
@@ -139,7 +189,9 @@ for frame in range(20000):
 
     for s in range(int(2e-3 // dt)):
         substep()
-        #move_board()
+        j+= 1
+        if j%4 ==0:
+            move_board()
     
     # Export positions to numpy array
     data_to_save.append(x.to_numpy())
@@ -151,6 +203,25 @@ for frame in range(20000):
         radius=1.5,
         palette=palette,
         palette_indices=clipped_material,
+    )
+    # Render the moving piston
+    piston_pos = board_states[None][0]
+    
+    #print(piston_pos)
+    gui.line(
+        [piston_pos, 0], [piston_pos, 1],
+        color=boundary_color,
+        radius=2
+    )
+    gui.line(
+        [0, .2], [1, .2],
+        color=boundary_color,
+        radius=2
+    )
+    gui.line(
+        [0, 0.1], [1, .1],
+        color=boundary_color,
+        radius=2
     )
 
     # Change to gui.show(f'{frame:06d}.png') to write images to disk
