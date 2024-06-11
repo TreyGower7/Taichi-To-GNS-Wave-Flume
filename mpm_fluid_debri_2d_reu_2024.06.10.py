@@ -4,8 +4,8 @@ import os
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 2  # Use a larger value for higher-res simulations
-n_particles, n_grid = 9000 * quality**2, 128 * quality
+quality = 1  # Use a larger value for higher-res simulations
+n_particles, n_grid = 15000 * quality**2, 128 * quality
 dx, inv_dx = 1 / n_grid, float(n_grid)
 dt = 1e-4 / quality
 p_vol, p_rho = (dx * 0.5) ** 2, 1
@@ -109,10 +109,10 @@ def substep():
         x[p] += dt * v[p]  # advection
         
      # Apply boundary collisions
-        if x[p][1] < 0.1:  # Lower boundary
-            x[p][1] = 0.1
-            if v[p][1] < 0:
-                v[p][1] = 0  # Stop downward velocity
+     #   if x[p][1] < 0.1:  # Lower boundary
+     #       x[p][1] = 0.1
+     ##       if v[p][1] < 0:
+     #           v[p][1] = 0  # Stop downward velocity
 
         if x[p][1] > 0.2:  # Upper boundary
             x[p][1] = 0.2
@@ -134,7 +134,7 @@ def substep():
 def move_board():
     b = board_states[None]
     b[1] += 1.0
-    period = 90
+    period = 360*2
     vel_strength = 2.0
     damping = 0.9  # Damping factor to reduce oscillations
     if b[1] >= 2 * period:
@@ -142,7 +142,7 @@ def move_board():
     # Update the piston position with damping
     b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta * damping
     # Ensure the piston stays within the boundaries
-    b[0] = ti.max(0, ti.min(b[0], 0.09))
+    b[0] = ti.max(0, ti.min(b[0], 0.12))
     board_states[None] = b
     
 @ti.kernel
@@ -152,13 +152,13 @@ def reset():
         if i < group_size:
             x[i] = [
                 ti.random() * 0.4 + 0.01,  # Fluid particles are spread over a wider x-range
-                ti.random() * 0.4 + 0.01   # Fluid particles are spread over a wider y-range
+                ti.random() * 0.3 + 0.01   # Fluid particles are spread over a wider y-range
             ]
             material[i] = 0  # fluid
         else:
             x[i] = [
-                ti.random() * 0.02 + 0.2,  # Block particles are confined to a smaller x-range
-                ti.random() * 0.12 + 0.12     # Block particles are confined to a smaller y-range
+                ti.random() * 0.1 + 0.2,  # Block particles are confined to a smaller x-range
+                ti.random() * 0.1 + 0.05     # Block particles are confined to a smaller y-range
             ]
             material[i] = 1  # jelly
         #x[i] = [
@@ -172,7 +172,6 @@ def reset():
         C[i] = ti.Matrix.zero(float, 2, 2)
     board_states[None] = [0.02, 0]  # Initial piston position
 
-j =0
 print("Press R to reset.")
 gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
 reset()
@@ -189,9 +188,7 @@ for frame in range(20000):
 
     for s in range(int(2e-3 // dt)):
         substep()
-        j+= 1
-        if j%4 ==0:
-            move_board()
+        move_board()
     
     # Export positions to numpy array
     data_to_save.append(x.to_numpy())
@@ -215,11 +212,6 @@ for frame in range(20000):
     )
     gui.line(
         [0, .2], [1, .2],
-        color=boundary_color,
-        radius=2
-    )
-    gui.line(
-        [0, 0.1], [1, .1],
         color=boundary_color,
         radius=2
     )
