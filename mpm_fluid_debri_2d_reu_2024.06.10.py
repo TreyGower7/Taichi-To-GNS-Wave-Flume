@@ -4,8 +4,8 @@ import os
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 1  # Use a larger value for higher-res simulations
-n_particles, n_grid = 15000 * quality**2, 128 * quality
+quality = 2  # Use a larger value for higher-res simulations
+n_particles, n_grid = 9000 * quality**2, 128 * quality
 dx, inv_dx = 1 / n_grid, float(n_grid)
 dt = 1e-4 / quality
 p_vol, p_rho = (dx * 0.5) ** 2, 1
@@ -46,7 +46,7 @@ def substep():
         # Hardening coefficient: snow gets harder when compressed
         h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p]))))
         if material[p] == 1:  # jelly, make it softer
-            h = 1
+            h = .5
         mu, la = mu_0 * h, lambda_0 * h
         if material[p] == 0:  # liquid
             mu = 0.0
@@ -134,7 +134,7 @@ def substep():
 def move_board():
     b = board_states[None]
     b[1] += .2 #adjusting this for the coordinate frame
-    period = 90
+    period = 180
     vel_strength = 2.0
     if b[1] >= 2 * period:
         b[1] = 0
@@ -146,18 +146,18 @@ def move_board():
     
 @ti.kernel
 def reset():
-    group_size = n_particles // 2
+    group_size = n_particles // 3
     for i in range(n_particles):
         if i < group_size:
             x[i] = [
-                ti.random() * 0.4 + 0.01,  # Fluid particles are spread over a wider x-range
-                ti.random() * 0.3 + 0.01   # Fluid particles are spread over a wider y-range
+                ti.random() * 0.4 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
+                ti.random() * 0.3 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
             ]
             material[i] = 0  # fluid
         else:
             x[i] = [
-                ti.random() * 0.1 + 0.2,  # Block particles are confined to a smaller x-range
-                ti.random() * 0.1 + 0.05     # Block particles are confined to a smaller y-range
+                ti.random() * 0.1 + 0.2 * (i // group_size),  # Block particles are confined to a smaller x-range
+                ti.random() * 0.1 + 0.05 * (i // group_size)     # Block particles are confined to a smaller y-range
             ]
             material[i] = 1  # jelly
         #x[i] = [
@@ -216,9 +216,12 @@ for frame in range(20000):
         radius=2
     )
 
-    # Change to gui.show(f'{frame:06d}.png') to write images to disk
+
     gui.show()
-    
-data_dict = {f"simulation_trajectory_{i}": trajectory_data for i, trajectory_data in enumerate(data_to_save)}
-np.savez("simulation_data_x.npz", **data_dict)
+
+# Stack the data along a new axis for formatting
+stacked_data = np.stack(data_to_save, axis=0)
+
+# Save the stacked data into an .npz file
+np.savez("simulation_data_x.npz", simulation_trajectory=stacked_data)
 
