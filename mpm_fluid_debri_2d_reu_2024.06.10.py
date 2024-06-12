@@ -176,8 +176,9 @@ gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
 reset()
 gravity[None] = [0, -9.81]
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
-    
-for frame in range(20000):  
+num_steps = 200 #Adjust for simulation runtime
+
+for frame in range(num_steps):  
     if gui.get_event(ti.GUI.PRESS):
             if gui.event.key == "r":
                 print("Resetting...")
@@ -218,10 +219,15 @@ for frame in range(20000):
 
 
     gui.show()
-
 # Stack the data along a new axis for formatting
 stacked_data = np.stack(data_to_save, axis=0)
 
+material_data = material.to_numpy()
+
+stacked_material = [stacked_data, material_data]
+
+print(stacked_material)
 # Save the stacked data into an .npz file
-np.savez("simulation_data_x.npz", simulation_trajectory=stacked_data)
+#np.save("simulation_data_x.npy", stacked_material)
+
 
