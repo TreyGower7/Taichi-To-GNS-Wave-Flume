@@ -133,14 +133,13 @@ def substep():
 @ti.kernel
 def move_board():
     b = board_states[None]
-    b[1] += 1.0
-    period = 360*2
+    b[1] += .2 #adjusting this for the coordinate frame
+    period = 90
     vel_strength = 2.0
-    damping = 0.9  # Damping factor to reduce oscillations
     if b[1] >= 2 * period:
         b[1] = 0
     # Update the piston position with damping
-    b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta * damping
+    b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
     # Ensure the piston stays within the boundaries
     b[0] = ti.max(0, ti.min(b[0], 0.12))
     board_states[None] = b
@@ -177,6 +176,7 @@ gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
 reset()
 gravity[None] = [0, -9.81]
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
+    
 for frame in range(20000):  
     if gui.get_event(ti.GUI.PRESS):
             if gui.event.key == "r":
