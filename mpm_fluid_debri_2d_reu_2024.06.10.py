@@ -176,7 +176,7 @@ gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
 reset()
 gravity[None] = [0, -9.81]
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
-num_steps = 200 #Adjust for simulation runtime
+num_steps = 2000 #Adjust for simulation runtime
 
 for frame in range(num_steps):  
     if gui.get_event(ti.GUI.PRESS):
@@ -219,15 +219,17 @@ for frame in range(num_steps):
 
 
     gui.show()
+    
 # Stack the data along a new axis for formatting
 stacked_data = np.stack(data_to_save, axis=0)
 
-material_data = material.to_numpy()
+#replacing material data with Dr. Kumars data
+material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
+# Combine arrays into a single dictionary (Using a list does not work)
+combined_data = {
+    0: stacked_data,
+    1: material_data
+}
 
-stacked_material = [stacked_data, material_data]
-
-print(stacked_material)
-# Save the stacked data into an .npz file
-#np.save("simulation_data_x.npy", stacked_material)
-
+np.savez('train.npz', simulation_trajectory=combined_data)
 
