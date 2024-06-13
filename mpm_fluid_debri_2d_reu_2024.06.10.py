@@ -155,10 +155,29 @@ def reset():
             ]
             material[i] = 0  # fluid
         else:
-            x[i] = [
-                ti.random() * 0.1 + 0.2 * (i // group_size),  # Block particles are confined to a smaller x-range
-                ti.random() * 0.1 + 0.05 * (i // group_size)     # Block particles are confined to a smaller y-range
-            ]
+            # Choose shape
+            shape = 0
+            if shape == 0:
+            # Initialize debris particles from circles for jelly material
+                angle = 2 * np.pi * ti.random()
+                radius = 0.005 * ti.random()
+                x[i] = [
+                    ti.random() * 0.1 + 0.1 * (i // group_size) + radius * ti.cos(angle),  # Circle particles in smaller x-range
+                    ti.random() * .9 + 0.1 * (i // group_size) + radius * ti.sin(angle)  # Circle particles in smaller y-range
+                ]
+            elif shape == 1:
+                # Initialize circles for jelly material
+                angle = 2 * np.pi * ti.random()
+                radius = 0.05 * ti.random()
+                x[i] = [
+                    ti.random() * 0.05 + 0.2 * (i // group_size) + radius * ti.cos(angle),  # Circle particles in smaller x-range
+                    ti.random() * 0.05 + 0.05 * (i // group_size) + radius * ti.sin(angle)  # Circle particles in smaller y-range
+                ]
+            elif shape == 2:
+                x[i] = [
+                    ti.random() * 0.1 + 0.2 * (i // group_size),  # Block particles are confined to a smaller x-range
+                    ti.random() * 0.1 + 0.05 * (i // group_size)     # Block particles are confined to a smaller y-range
+                ]
             material[i] = 1  # jelly
         #x[i] = [
         #    ti.random() * 0.2 + 0.1 + 0.4 * (i // group_size),
@@ -195,7 +214,6 @@ for frame in range(num_steps):
     data_to_save.append(x.to_numpy())
 
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
-
     gui.circles(
         x.to_numpy(),
         radius=1.5,
