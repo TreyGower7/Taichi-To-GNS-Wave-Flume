@@ -211,6 +211,7 @@ def save_metadata():
     Returns:
         None
     """
+    file_path = "./dataset"
     #Using a list for each time step for formatting
     global v_data_to_save
     vel = np.stack(v_data_to_save,axis=0)
@@ -234,20 +235,32 @@ def save_metadata():
         "acc_mean": f'[{acc_mean[0]}, {acc_mean[1]}]', #[5.237611158734309e-07, 2.3633027988858656e-07], 
         "acc_std": f'[{acc_std[0]}, {acc_std[1]}]', #[0.0002582944917306106, 0.00029554531667679154]
     }
-
-    with open('metadata.json', 'w') as file:
+    
+        
+      # Ensure the target directory exists
+    os.makedirs(file_path, exist_ok=True)
+    
+    # Write metadata to a JSON file
+    with open(os.path.join(file_path, 'metadata.json'), 'w') as file:
         json.dump(metadata, file)
         print("Metadata Saved!\n")
-        print(metadata)
 
     
-def save_simulation(data_designation: str):
+def save_simulation():
     """Save train.npz, test.npz,or valid.npz to file
     Args:
-        data_designation (str): Specifies what the data will be used for
+        None
     Returns:
         None
     """
+    global data_designation
+    file_path = "/Users/treygower/code-REU/Physics-Informed-ML/dataset/"
+    
+    # Ensure the directory exists
+    directory = os.path.dirname(file_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        
     # Stack the data along a new axis for formatting
     pos_data = np.stack(data_to_save, axis=0)
     
@@ -262,21 +275,21 @@ def save_simulation(data_designation: str):
     }
     
     if data_designation.lower() in ("r", "rollout"):
-        np.savez_compressed("rollout.npz", simulation_trajectory=combined_data)
+        np.savez_compressed(f'{file_path}/rollout.npz', simulation_trajectory=combined_data)
 
-    if data_designation.lower() in ("t", "train"):
-        np.savez_compressed("train.npz", simulation_trajectory=combined_data)
+    elif data_designation.lower() in ("t", "train"):
+        np.savez_compressed(f'{file_path}/train.npz', simulation_trajectory=combined_data)
         
-    if data_designation.lower() in ("v", "valid"):
-        np.savez_compressed("valid.npz", simulation_trajectory=combined_data)
+    elif data_designation.lower() in ("v", "valid"):
+        np.savez_compressed(f'{file_path}/valid.npz', simulation_trajectory=combined_data)
         
     else:
-        np.savez_compressed("train.npz", simulation_trajectory=combined_data)
+        np.savez_compressed("unspecified_sim_data.npz", simulation_trajectory=combined_data)
         
     print("Simulation Data Saved!\n")
 
 #Simulation Prerequisites 
-data_designation = input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> ')
+data_designation = str(input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> '))
 sequence_length = int(input('How many time steps to simulate? --> '))
 gravity[None] = [0, -9.81]
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
@@ -328,7 +341,7 @@ for frame in range(sequence_length):
     gui.show()
 
 #Prep for GNS input
-save_simulation(data_designation)
+save_simulation()
 save_metadata()
 
 
