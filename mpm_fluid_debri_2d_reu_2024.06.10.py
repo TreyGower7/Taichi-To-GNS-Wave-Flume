@@ -1,11 +1,14 @@
 import taichi as ti
 import numpy as np
+import imageio
+import matplotlib.pyplot as plt
 import os
+import json
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 2  # Use a larger value for higher-res simulations
-n_particles, n_grid = 9000 * quality**2, 128 * quality
+n_particles, n_grid = 6000 * quality**2, 128 * quality
 dx, inv_dx = 1 / n_grid, float(n_grid)
 dt = 1e-4 / quality
 p_vol, p_rho = (dx * 0.5) ** 2, 1
@@ -14,9 +17,19 @@ E, nu = 5e3, 0.2  # Young's modulus and Poisson's ratio
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 time_delta = 1.0 / 20.0
 
+#Added parameters for piston and particle interaction
 boundary_color = 0xEBACA2
 board_states = ti.Vector.field(2, float)
+
+#Define some parameters we would like to track
 data_to_save = [] #used for saving positional data for particles 
+v_data_to_save = []
+bounds = [[0.1, 0.9], [0.1, 0.9]]
+vel_mean = []
+vel_std = []
+acc_mean = []
+acc_std = []
+
 
 x = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
 v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
@@ -133,15 +146,16 @@ def substep():
 @ti.kernel
 def move_board():
     b = board_states[None]
-    b[1] += .2 #adjusting this for the coordinate frame
+    b[1] += .2 #adjusting for the coordinate frame
     period = 180
     vel_strength = 2.0
     if b[1] >= 2 * period:
         b[1] = 0
-    # Update the piston position with damping
+    # Update the piston position
     b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * time_delta
     # Ensure the piston stays within the boundaries
     b[0] = ti.max(0, ti.min(b[0], 0.12))
+    #b[0] = ti.max(0.88, ti.min(b[0], 1.0))  # boundaries for the right side if we want piston there
     board_states[None] = b
     
 @ti.kernel
@@ -166,7 +180,7 @@ def reset():
                     ti.random() * .9 + 0.1 * (i // group_size) + radius * ti.sin(angle)  # Circle particles in smaller y-range
                 ]
             elif shape == 1:
-                # Initialize circles for jelly material
+            # Initialize circles for jelly material
                 angle = 2 * np.pi * ti.random()
                 radius = 0.05 * ti.random()
                 x[i] = [
@@ -190,14 +204,88 @@ def reset():
         C[i] = ti.Matrix.zero(float, 2, 2)
     board_states[None] = [0.02, 0]  # Initial piston position
 
-print("Press R to reset.")
-gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
-reset()
+def save_metadata():
+    """Save metadata.json to file
+    Args:
+        None
+    Returns:
+        None
+    """
+    #Using a list for each time step for formatting
+    global v_data_to_save
+    vel = np.stack(v_data_to_save,axis=0)
+    vel_diff = np.diff(vel, axis=0) #computing acceleration along the time dependant axis
+    
+    #Define meta data dictionary
+    vel_mean = np.mean(vel, axis=(0, 1))
+    vel_std = np.std(vel, axis=(0, 1)) #standard deviation of velocity of the flattened array
+    acc_mean = np.mean(vel_diff, axis=(0, 1)) #mean acceleration of the flattened array from velocity
+    acc_std = np.std(vel_diff, axis=(0, 1))  #standard deviation of acceleration of the flattened array from velocity 
+
+    #Formatting enforced
+    metadata = {
+        "bounds": bounds,
+        "sequence_length": sequence_length, 
+        "default_connectivity_radius": 0.015, 
+        "dim": 2, 
+        "dt": 0.0025, 
+        "vel_mean": f'[{vel_mean[0]}, {vel_mean[1]}]', #[5.123277536458455e-06, -0.0009965205918140803], 
+        "vel_std": f'[{vel_std[0]}, {vel_std[1]}]', #[0.0021978993231675805, 0.0026653552458701774], 
+        "acc_mean": f'[{acc_mean[0]}, {acc_mean[1]}]', #[5.237611158734309e-07, 2.3633027988858656e-07], 
+        "acc_std": f'[{acc_std[0]}, {acc_std[1]}]', #[0.0002582944917306106, 0.00029554531667679154]
+    }
+
+    with open('metadata.json', 'w') as file:
+        json.dump(metadata, file)
+        print("Metadata Saved!\n")
+        print(metadata)
+
+    
+def save_simulation(data_designation: str):
+    """Save train.npz, test.npz,or valid.npz to file
+    Args:
+        data_designation (str): Specifies what the data will be used for
+    Returns:
+        None
+    """
+    # Stack the data along a new axis for formatting
+    pos_data = np.stack(data_to_save, axis=0)
+    
+    #replacing material data with Dr. Kumars data
+    material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
+    # Combine arrays into a single dictionary (Using a list does not work)
+    combined_data = {
+        "simulation_0": (
+        pos_data,
+        material_data
+        )
+    }
+    
+    if data_designation.lower() in ("r", "rollout"):
+        np.savez_compressed("rollout.npz", simulation_trajectory=combined_data)
+
+    if data_designation.lower() in ("t", "train"):
+        np.savez_compressed("train.npz", simulation_trajectory=combined_data)
+        
+    if data_designation.lower() in ("v", "valid"):
+        np.savez_compressed("valid.npz", simulation_trajectory=combined_data)
+        
+    else:
+        np.savez_compressed("train.npz", simulation_trajectory=combined_data)
+        
+    print("Simulation Data Saved!\n")
+
+#Simulation Prerequisites 
+data_designation = input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> ')
+sequence_length = int(input('How many time steps to simulate? --> '))
 gravity[None] = [0, -9.81]
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
-num_steps = 2000 #Adjust for simulation runtime
 
-for frame in range(num_steps):  
+print("\nPress R to reset.")
+gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
+reset()
+
+for frame in range(sequence_length):  
     if gui.get_event(ti.GUI.PRESS):
             if gui.event.key == "r":
                 print("Resetting...")
@@ -212,7 +300,8 @@ for frame in range(num_steps):
     
     # Export positions to numpy array
     data_to_save.append(x.to_numpy())
-
+    v_data_to_save.append(v.to_numpy())
+    
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     gui.circles(
         x.to_numpy(),
@@ -237,17 +326,12 @@ for frame in range(num_steps):
 
 
     gui.show()
-    
-# Stack the data along a new axis for formatting
-stacked_data = np.stack(data_to_save, axis=0)
 
-#replacing material data with Dr. Kumars data
-material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
-# Combine arrays into a single dictionary (Using a list does not work)
-combined_data = {
-    0: stacked_data,
-    1: material_data
-}
+#Prep for GNS input
+save_simulation(data_designation)
+save_metadata()
 
-np.savez('train.npz', simulation_trajectory=combined_data)
+
+
+
 
