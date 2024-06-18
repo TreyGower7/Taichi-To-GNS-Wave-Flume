@@ -1,7 +1,6 @@
 import taichi as ti
 import numpy as np
 import imageio
-import matplotlib.pyplot as plt
 import os
 import json
 
@@ -272,26 +271,26 @@ def save_simulation():
     
     #replacing material data with Dr. Kumars material ids
     material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
-    # Combine arrays into a single dictionary (Using a list does not work)
-    combined_data = {
-        'simulation_0':
-        (
+    
+    # Combine arrays into a single dictionary
+    simulation_data = {
+        'simulation_0': (
             pos_data,
             material_data
         )
     }
-
+    
     if data_designation.lower() in ("r", "rollout"):
-        np.savez_compressed(f'{file_path}/test.npz', simulation_trajectory=combined_data)
+        np.savez_compressed(f'{file_path}/test.npz', **simulation_data)
 
     elif data_designation.lower() in ("t", "train"):
-        np.savez_compressed(f'{file_path}/train.npz', **combined_data)
+        np.savez_compressed(f'{file_path}/train.npz', **simulation_data)
         
     elif data_designation.lower() in ("v", "valid"):
-        np.savez_compressed(f'{file_path}/valid.npz', simulation_trajectory=combined_data)
+        np.savez_compressed(f'{file_path}/valid.npz', **simulation_data)
         
     else:
-        np.savez_compressed("unspecified_sim_data.npz", simulation_trajectory=combined_data)
+        np.savez_compressed("unspecified_sim_data.npz", **simulation_data)
         
     print("Simulation Data Saved!\n")
 
@@ -318,7 +317,7 @@ for frame in range(sequence_length):
         substep()
         move_board()
     
-    # Export positions to numpy array
+    # Export positions/velocities to lists
     data_to_save.append(x.to_numpy())
     v_data_to_save.append(v.to_numpy())
     
