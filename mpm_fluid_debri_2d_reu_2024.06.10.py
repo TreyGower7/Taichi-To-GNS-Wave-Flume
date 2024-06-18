@@ -275,7 +275,7 @@ def save_simulation():
     }
     
     if data_designation.lower() in ("r", "rollout"):
-        np.savez_compressed(f'{file_path}/rollout.npz', simulation_trajectory=combined_data)
+        np.savez_compressed(f'{file_path}/test.npz', simulation_trajectory=combined_data)
 
     elif data_designation.lower() in ("t", "train"):
         np.savez_compressed(f'{file_path}/train.npz', simulation_trajectory=combined_data)
@@ -342,7 +342,8 @@ for frame in range(sequence_length):
 
 #Prep for GNS input
 save_simulation()
-save_metadata()
+if data_designation.lower() in ("t", "train"):
+    save_metadata()
 
 
 
