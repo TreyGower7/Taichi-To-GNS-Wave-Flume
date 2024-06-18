@@ -270,21 +270,22 @@ def save_simulation():
     # Stack the data along a new axis for formatting
     pos_data = np.stack(data_to_save, axis=0)
     
-    #replacing material data with Dr. Kumars data
+    #replacing material data with Dr. Kumars material ids
     material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
     # Combine arrays into a single dictionary (Using a list does not work)
     combined_data = {
-        "simulation_0": (
-        pos_data,
-        material_data
+        'simulation_0':
+        (
+            pos_data,
+            material_data
         )
     }
-    
+
     if data_designation.lower() in ("r", "rollout"):
         np.savez_compressed(f'{file_path}/test.npz', simulation_trajectory=combined_data)
 
     elif data_designation.lower() in ("t", "train"):
-        np.savez_compressed(f'{file_path}/train.npz', simulation_trajectory=combined_data)
+        np.savez_compressed(f'{file_path}/train.npz', **combined_data)
         
     elif data_designation.lower() in ("v", "valid"):
         np.savez_compressed(f'{file_path}/valid.npz', simulation_trajectory=combined_data)
