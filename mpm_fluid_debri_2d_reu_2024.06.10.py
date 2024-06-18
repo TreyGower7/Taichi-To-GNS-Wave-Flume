@@ -218,10 +218,10 @@ def save_metadata():
     vel_diff = np.diff(vel, axis=0) #computing acceleration along the time dependant axis
     
     #Define meta data dictionary from trajectories and timesteps
-    vel_mean = np.mean(vel, axis=(0, 1))
-    vel_std = np.std(vel, axis=(0, 1)) #standard deviation of velocity
-    acc_mean = np.mean(vel_diff, axis=(0, 1)) #mean acceleration from velocity
-    acc_std = np.std(vel_diff, axis=(0, 1))  #standard deviation of acceleration from velocity 
+    vel_mean = np.nanmean(vel, axis=(0, 1))
+    vel_std = np.nanstd(vel, axis=(0, 1)) #standard deviation of velocity
+    acc_mean = np.nanmean(vel_diff, axis=(0, 1)) #mean acceleration from velocity
+    acc_std = np.nanstd(vel_diff, axis=(0, 1))  #standard deviation of acceleration from velocity 
    
     # Convert numpy types to native Python types
     vel_mean = [float(x) for x in vel_mean]
