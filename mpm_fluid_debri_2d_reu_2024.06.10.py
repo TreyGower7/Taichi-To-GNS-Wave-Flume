@@ -217,11 +217,11 @@ def save_metadata():
     vel = np.stack(v_data_to_save,axis=0)
     vel_diff = np.diff(vel, axis=0) #computing acceleration along the time dependant axis
     
-    #Define meta data dictionary
+    #Define meta data dictionary from trajectories and timesteps
     vel_mean = np.mean(vel, axis=(0, 1))
-    vel_std = np.std(vel, axis=(0, 1)) #standard deviation of velocity of the flattened array
-    acc_mean = np.mean(vel_diff, axis=(0, 1)) #mean acceleration of the flattened array from velocity
-    acc_std = np.std(vel_diff, axis=(0, 1))  #standard deviation of acceleration of the flattened array from velocity 
+    vel_std = np.std(vel, axis=(0, 1)) #standard deviation of velocity
+    acc_mean = np.mean(vel_diff, axis=(0, 1)) #mean acceleration from velocity
+    acc_std = np.std(vel_diff, axis=(0, 1))  #standard deviation of acceleration from velocity 
 
     #Formatting enforced
     metadata = {
@@ -230,10 +230,10 @@ def save_metadata():
         "default_connectivity_radius": 0.015, 
         "dim": 2, 
         "dt": 0.0025, 
-        "vel_mean": f'[{vel_mean[0]}, {vel_mean[1]}]', #[5.123277536458455e-06, -0.0009965205918140803], 
-        "vel_std": f'[{vel_std[0]}, {vel_std[1]}]', #[0.0021978993231675805, 0.0026653552458701774], 
-        "acc_mean": f'[{acc_mean[0]}, {acc_mean[1]}]', #[5.237611158734309e-07, 2.3633027988858656e-07], 
-        "acc_std": f'[{acc_std[0]}, {acc_std[1]}]', #[0.0002582944917306106, 0.00029554531667679154]
+        "vel_mean": [vel_mean[0], vel_mean[1]], #[5.123277536458455e-06, -0.0009965205918140803], 
+        "vel_std": [vel_std[0], vel_std[1]], #[0.0021978993231675805, 0.0026653552458701774], 
+        "acc_mean": [acc_mean[0], acc_mean[1]], #[5.237611158734309e-07, 2.3633027988858656e-07], 
+        "acc_std": [acc_std[0], acc_std[1]], #[0.0002582944917306106, 0.00029554531667679154]
     }
     
         
