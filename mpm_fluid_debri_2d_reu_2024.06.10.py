@@ -222,7 +222,13 @@ def save_metadata():
     vel_std = np.std(vel, axis=(0, 1)) #standard deviation of velocity
     acc_mean = np.mean(vel_diff, axis=(0, 1)) #mean acceleration from velocity
     acc_std = np.std(vel_diff, axis=(0, 1))  #standard deviation of acceleration from velocity 
-
+   
+    # Convert numpy types to native Python types
+    vel_mean = [float(x) for x in vel_mean]
+    vel_std = [float(x) for x in vel_std]
+    acc_mean = [float(x) for x in acc_mean]
+    acc_std = [float(x) for x in acc_std]
+    
     #Formatting enforced
     metadata = {
         "bounds": bounds,
@@ -230,10 +236,10 @@ def save_metadata():
         "default_connectivity_radius": 0.015, 
         "dim": 2, 
         "dt": 0.0025, 
-        "vel_mean": [vel_mean[0], vel_mean[1]], #[5.123277536458455e-06, -0.0009965205918140803], 
-        "vel_std": [vel_std[0], vel_std[1]], #[0.0021978993231675805, 0.0026653552458701774], 
-        "acc_mean": [acc_mean[0], acc_mean[1]], #[5.237611158734309e-07, 2.3633027988858656e-07], 
-        "acc_std": [acc_std[0], acc_std[1]], #[0.0002582944917306106, 0.00029554531667679154]
+        "vel_mean": vel_mean, #[5.123277536458455e-06, -0.0009965205918140803], 
+        "vel_std": vel_std, #[0.0021978993231675805, 0.0026653552458701774], 
+        "acc_mean": acc_mean, #[5.237611158734309e-07, 2.3633027988858656e-07], 
+        "acc_std": acc_std, #[0.0002582944917306106, 0.00029554531667679154]
     }
     
         
