@@ -3,7 +3,6 @@ import numpy as np
 import imageio
 import os
 import json
-#from scipy import erf
 import math
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
@@ -144,7 +143,33 @@ def substep():
             displacement = piston_pos - x[p][0]
             force = 1 * displacement  # Hooke's law: F = k * x
             v[p][0] += force * dt / p_mass  # Apply the force to the velocity
-        
+
+@ti.func
+def erf_approx(x):
+    """Needed an approximation to the gauss error function (math lib doesnt work with taichi)
+    
+    From: https://en.wikipedia.org/wiki/Error_function
+    """
+    # Approximation constants
+    a1 =  0.254829592
+    a2 = -0.284496736
+    a3 =  1.421413741
+    a4 = -1.453152027
+    a5 =  1.061405429
+    p  =  0.3275911
+
+    # Save the sign of x
+    sign = 1
+    if x < 0:
+        sign = -1
+    x = ti.abs(x)
+
+    # Abramowitz and Stegun formula 
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * ti.exp(-x * x)
+
+    return sign * y
+    
 @ti.kernel
 def move_board():
     b = board_states[None]
@@ -159,27 +184,27 @@ def move_board():
     b[0] = ti.max(0, ti.min(b[0], 0.12))
     #b[0] = ti.max(0.88, ti.min(b[0], 1.0))  # boundaries for the right side if we want piston there
     board_states[None] = b
-'''
+
 @ti.kernel
 def move_board_solitary():
     t = time
     b = board_states[None]
     b[1] += 0.2  # Adjusting for the coordinate frame
     period = 180
-    vel_strength = 2.0
+    #vel_strength = 2.0
 
     if b[1] >= 2 * period:
         b[1] = 0
 
-    # Update the piston position
-    b[0] += (math.erf(t - 2.5).to_numpy() + 1) / 2 * vel_strength * time_delta
-
+    # Update the piston position using the error function approximation function
+    b[0] += (erf_approx(t - 2.5) + 1) / 2 #Soliton wave
+    
     # Ensure the piston stays within the boundaries
     b[0] = ti.max(0, ti.min(b[0], 0.12))
 
     # Store the updated state back to the field
     board_states[None] = b
-'''    
+
 @ti.kernel
 def reset():
     group_size = n_particles // 3
@@ -316,6 +341,8 @@ def save_simulation():
         np.savez_compressed("unspecified_sim_data.npz", **simulation_data)
         
     print("Simulation Data Saved!\n")
+# Define a Taichi field to store the result
+
 
 #Simulation Prerequisites 
 data_designation = str(input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> '))
@@ -338,10 +365,11 @@ for frame in range(sequence_length):
 
     for s in range(int(2e-3 // dt)):
         substep()
-        move_board()
-    
-        #move_board_solitary()
-        time += time_delta
+        #move_board()
+        
+        move_board_solitary()
+    time += time_delta
+    print(f't = {round(time,2)}')
     
     # Export positions/velocities to lists
     data_to_save.append(x.to_numpy())
