@@ -3,6 +3,8 @@ import numpy as np
 import imageio
 import os
 import json
+#from scipy import erf
+import math
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
@@ -19,6 +21,7 @@ time_delta = 1.0 / 20.0
 #Added parameters for piston and particle interaction
 boundary_color = 0xEBACA2
 board_states = ti.Vector.field(2, float)
+time = 0
 
 #Define some parameters we would like to track
 data_to_save = [] #used for saving positional data for particles 
@@ -156,7 +159,27 @@ def move_board():
     b[0] = ti.max(0, ti.min(b[0], 0.12))
     #b[0] = ti.max(0.88, ti.min(b[0], 1.0))  # boundaries for the right side if we want piston there
     board_states[None] = b
-    
+'''
+@ti.kernel
+def move_board_solitary():
+    t = time
+    b = board_states[None]
+    b[1] += 0.2  # Adjusting for the coordinate frame
+    period = 180
+    vel_strength = 2.0
+
+    if b[1] >= 2 * period:
+        b[1] = 0
+
+    # Update the piston position
+    b[0] += (math.erf(t - 2.5).to_numpy() + 1) / 2 * vel_strength * time_delta
+
+    # Ensure the piston stays within the boundaries
+    b[0] = ti.max(0, ti.min(b[0], 0.12))
+
+    # Store the updated state back to the field
+    board_states[None] = b
+'''    
 @ti.kernel
 def reset():
     group_size = n_particles // 3
@@ -276,7 +299,7 @@ def save_simulation():
     simulation_data = {
         'simulation_0': (
             pos_data,
-            material_data
+            np.array(material_data.tolist())
         )
     }
     
@@ -316,6 +339,9 @@ for frame in range(sequence_length):
     for s in range(int(2e-3 // dt)):
         substep()
         move_board()
+    
+        #move_board_solitary()
+        time += time_delta
     
     # Export positions/velocities to lists
     data_to_save.append(x.to_numpy())
