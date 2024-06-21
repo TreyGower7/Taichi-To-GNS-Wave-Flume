@@ -1,24 +1,54 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Added above lines for external execution of the script
 import taichi as ti
 import numpy as np
 import imageio
 import os
 import json
 import math
+import platform # For getting the operating system name, taichi may already have something for this
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 2  # Use a larger value for higher-res simulations
-n_particles, n_grid = 6000 * quality**2, 128 * quality
+n_particles_base = 6000 # Better ways to do this, shouldnt have to set it manually
+n_particles = n_particles_base * quality**2
+n_grid_base = 128
+n_grid = n_grid_base * quality
 dx, inv_dx = 1 / n_grid, float(n_grid)
-dt = 1e-4 / quality
+
+print("Number of Particles: ", n_particles)
+print("Number of Grid-Nodes each Direction: ", n_grid)
+print("dx: ", dx)
+
+# Material properties
 p_vol, p_rho = (dx * 0.5) ** 2, 1
 p_mass = p_vol * p_rho
 E, nu = 5e3, 0.2  # Young's modulus and Poisson's ratio
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 time_delta = 1.0 / 20.0
 
+# Calc timestep based on elastic moduli of materials
+CFL = 0.375 # CFL stability number. Typically 0.3 - 0.5 is good
+bulk_modulus = E / (3 * (1 - 2 * nu))  # Bulk modulus
+max_vel = math.sqrt( max(abs(bulk_modulus), 1.0) / max(abs(p_rho), 1.0) ) # Speed of sound in the material
+critical_time_step = CFL * dx / max_vel # Critical time step for stability in explicit time-integration rel. to pressure wave speed
+scaled_time_step = critical_time_step * 1.0 # may need to adjust based on the domain size
+print("Critical Time Step: ", critical_time_step)
+print("Scaled Time Step: ", scaled_time_step)
+set_dt_to_critical = True
+if set_dt_to_critical:
+    # CFL condition for explicit time-integration
+    dt = scaled_time_step
+else:
+    # Manual
+    dt = 1e-4 / max(abs(quality),1)
+print("dt = ", dt)
+
 #Added parameters for piston and particle interaction
-boundary_color = 0xEBACA2
+boundary_color = 0xEBACA2 # 
 board_states = ti.Vector.field(2, float)
 time = 0
 
@@ -277,6 +307,7 @@ def save_metadata():
     acc_std = [float(x) for x in acc_std]
     
     #Formatting enforced
+    # Might want to replace 0.0025 with the dt actually used, etc., but maybe its like this for a reason
     metadata = {
         "bounds": bounds,
         "sequence_length": sequence_length, 
@@ -307,51 +338,117 @@ def save_simulation():
         None
     """
     global data_designation
-    file_path = "/Users/treygower/code-REU/Physics-Informed-ML/dataset/"
     
+    # Hardcode user path for now, may need to debug 
+    query_user_name = False
+    if (query_user_name):
+        user_name = os.getlogin()
+    else:
+        user_name = "treygower"
+
+    # Will need to debug/improve this, but should help with cross-platform compatibility
+    # Define file_path to save to data, models, rollout folder. Located in directory of this file script
+    if platform.system() == 'Linux' or platform.system() == 'linux':
+        file_path = "./dataset/"
+    elif platform.system() == 'Darwin' or platform.system() == 'macOS':
+        # Check if on local mac machine, temporary hardcode
+        file_path = "/Users/" + user_name + "/code-REU/Physics-Informed-ML/dataset/"
+    elif platform.system() == 'Windows':
+        # file_path = "C:/Users/" + uesr_name + "/Documents/Physics-Informed-ML/dataset/"
+        file_path = "./dataset/"
+    else:
+        file_path = "./dataset/"
+            
     # Ensure the directory exists
     directory = os.path.dirname(file_path)
     if not os.path.exists(directory):
         os.makedirs(directory)
+    # Should probably check if a file with the same name exists already and handle that
+    # Maybe append a number to the end of the file name or something to prevent overwriting
         
     # Stack the data along a new axis for formatting
-    pos_data = np.stack(data_to_save, axis=0)
+    pos_data = np.stack(data_to_save, axis=0) if (np.version.version >= '1.22.0') else np.stack(np.asarray(data_to_save, dtype=object), axis=0) 
     
+    
+    # Maybe have a dictionary/enum for this, I haven't checked the ID mapping FYI
+    # material_id_dict = { "Water": 0, "Sand": 1, "Debris": 3, "Piston": 4, "Boundary": 5}
+     
     #replacing material data with Dr. Kumars material ids
-    material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
+    # material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
+    material_numpy = material.to_numpy()
+    material_data = np.where(material_numpy == 0, 5 + (0 * material_numpy), material_numpy)
+    # material_data = np.where(material.to_numpy() == 0 or material.to_numpy() == 5, np.array(material, dtype=int))
     
     # Combine arrays into a single dictionary
+    # simulation_data = {
+    #     'simulation_0': (
+    #         pos_data,
+    #         np.array(material_data.tolist())
+    #     )
+    # }
+    #check version of numpy >= 1.22.0
+    # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
+    # Should add a check for the python version as well
+    # mat_data = np.array(material_data.tolist(), dtype=object) if (np.version.version >= '1.22.0') else np.array(material_data.tolist())
+    if (np.version.version >= '1.22.0'):
+        print("Using numpy version (>= 1.22.0), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
+        pos_data = np.array(np.stack(np.asarray(data_to_save, dtype=object), axis=0), dtype=object)
+        mat_data = np.asarray(material_data, dtype=object)
+    else:
+        print("Warning: Using numpy version: ", np.version.version)
+        pos_data = np.array(np.stack(data_to_save, axis=0), dtype=object)
+        mat_data = np.asarray(material_data, dtype=object)
+        # np.array(material_data.tolist())
+    
+    print("pos_data: ", pos_data.shape)
+    print("mat_data: ", mat_data.shape)
     simulation_data = {
         'simulation_0': (
             pos_data,
-            np.array(material_data.tolist())
+            material_data
         )
     }
     
-    if data_designation.lower() in ("r", "rollout"):
+    # save_relative_to_cwd = True
+    # Need to fix mac path, etc. prior to this and double-check relative path output
+    # if save_relative_to_cwd:
+    #     cwd_path = os.getcwd()
+    #     file_path = os.path.join(cwd_path, file_path)
+    cwd_path = os.getcwd() # Get current working directory
+
+    if data_designation.lower() in ("r", "rollout", "test"):
+        # Should clarify the difference in naming between test and rollout
+        output_file_path = os.path.join(file_path, "test.npz")
         np.savez_compressed(f'{file_path}/test.npz', **simulation_data)
 
     elif data_designation.lower() in ("t", "train"):
+        output_file_path = os.path.join(file_path, "train.npz")
         np.savez_compressed(f'{file_path}/train.npz', **simulation_data)
         
     elif data_designation.lower() in ("v", "valid"):
+        output_file_path = os.path.join(file_path, "valid.npz")
         np.savez_compressed(f'{file_path}/valid.npz', **simulation_data)
         
     else:
+        output_file_path = os.path.join(cwd_path, "unspecified_sim_data.npz")
         np.savez_compressed("unspecified_sim_data.npz", **simulation_data)
         
-    print("Simulation Data Saved!\n")
+    print("Simulation Data Saved to: ", file_path)
+    
 # Define a Taichi field to store the result
 
 
 #Simulation Prerequisites 
 data_designation = str(input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> '))
 sequence_length = int(input('How many time steps to simulate? --> '))
-gravity[None] = [0, -9.81]
+gravity[None] = [0, -9.81] # Gravity in m/s^2, this implies use of metric units
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
 
+gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
+gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes
+
 print("\nPress R to reset.")
-gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=0x112F41)
+gui = ti.GUI("Taichi MPM-With-Piston", res=512, background_color=gui_background_color_white)
 reset()
 
 for frame in range(sequence_length):  
@@ -363,13 +460,13 @@ for frame in range(sequence_length):
             elif gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]:
                 break
 
-    for s in range(int(2e-3 // dt)):
+    for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
         substep()
         #move_board()
         
         move_board_solitary()
     time += time_delta
-    print(f't = {round(time,2)}')
+    print(f't = {round(time,3)}')
     
     # Export positions/velocities to lists
     data_to_save.append(x.to_numpy())
