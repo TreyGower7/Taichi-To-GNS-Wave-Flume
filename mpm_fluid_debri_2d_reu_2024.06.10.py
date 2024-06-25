@@ -17,8 +17,8 @@ quality =  3 # Use a larger value for higher-res simulations
 n_grid_base = 128
 n_grid = n_grid_base * quality
 dx, inv_dx = 1 / (n_grid), float(n_grid)
-n_particles_water = (0.9 * 0.5) * n_grid_base**2
-n_particles_base = 2048*2 # Better ways to do this, shouldnt have to set it manually
+n_particles_water = (0.9 * 0.2) * n_grid_base**2
+n_particles_base = 2048*4 # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * quality**DIMENSIONS
 
 # Material properties
@@ -519,25 +519,26 @@ def downsample_particles(data, mat_data):
     """
     #Stack data
     
-    n = particles_per_dx
+    k = particles_per_dx # Scaling Factor
 
     # ensuring data is downsampled enough for gns
     while True:
-        n += 1
-        if n_particles >= 7000 and data[1].size % n != 0:
+        if n_particles/k > 7000 & data[1].size % k == 0:
+            k += 1
             continue
         else:
-            print(f'downsampling by averaging over n = {n} particles')
+            k -=1
+            print(f'downsampling by averaging over n = {k} particles')
             break
 
     # Ensure the second dimension is divisible by n
-    if data.shape[1] % n != 0:
+    if data.shape[1] % k != 0:
         raise ValueError("The second dimension size must be divisible by the number of particles to average.")
     
     # Reshape the array to group particles together
-    reshaped = data.reshape(data.shape[0], data.shape[1] // n, n, data.shape[2])
+    reshaped = data.reshape(data.shape[0], data.shape[1] // k, k, data.shape[2])
     # Downsample material data using decimation
-    downsampled_mat = mat_data[::n]
+    downsampled_mat = mat_data[::k]
     # Average over the new third dimension
     downsampled_data = np.mean(reshaped, axis=2)
         
