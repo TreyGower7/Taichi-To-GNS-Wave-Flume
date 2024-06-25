@@ -530,14 +530,14 @@ def save_simulation():
 
 
     material_numpy = material.to_numpy()
-    mat_data = np.where(material_numpy == 0, material_id_dict['Water'], material_numpy)
+    # mat_data = np.where(material_numpy == 0, material_id_dict['Water'], material_numpy)
     mat_data_tmp = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
 
     mat_data = np.asarray(mat_data_tmp, dtype=object)
     pos_data = np.stack(data_to_save, axis=0)
 
      # Perform downsampling for GNS    
-    downsampled_data, downsampled_mat_data = downsample_particles(pos_data_output, mat_data_output)
+    downsampled_data, downsampled_mat_data = downsample_particles(pos_data, mat_data)
 
     # Check version of numpy >= 1.22.0, roughly when numpy updated to deprecate ragged arrays in npz files (but allow structured?)
     # 
