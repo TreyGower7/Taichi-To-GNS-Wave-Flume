@@ -1,12 +1,15 @@
 #!/bin/bash
 
-# Create virtual environment with dependencies 
+# Create virtual environment with dependencies (if you dont have it)
 #TMP_DIR="../"
 
 #virtualenv --python=python3.6 "${TMP_DIR}/gns/venv"
 #source "${TMP_DIR}/gns/venv/bin/activate"
 
+# Install dependencies.
+#pip install --upgrade -r requirements.txt
 # Check if the directory gns-flume exists
+
 
 if [ -d "gns-flume" ]; then
   echo "Directory gns-flume exists; Using that parent directory"
