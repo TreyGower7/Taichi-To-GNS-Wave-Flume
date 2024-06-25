@@ -104,7 +104,26 @@ def update_material_properties():
         mu = 0.0 # assumed no shear modulus...
 
     return h, mu, la
+
+def compute_stress(p):
+    """Computing stress in the particles using simple fluid formulation rather than SVD
     
+    Args:
+        p: the current particle to be updated
+
+    Returns:
+        Stress: local stress state/tensor describing the particles stress from its surrundings
+        
+    Non local continuum plasticity https://www.sciencedirect.com/science/article/pii/B9780128122365000025
+    """
+    # Compute Right Cauchy-Green tensor C
+    RCG = F[p].transpose() @ F[p]
+    # Computing the Green strain tensor from deformation gradient: https://en.wikiversity.org/wiki/Continuum_mechanics/Strains_and_deformations
+    strain = 0.5 * RCG - ti.Matrix.identity(ti.f32, 2) 
+     # Cauchy Stress Tensor https://en.wikipedia.org/wiki/Cauchy_stress_tensor
+    #stress = 2 * mu * strain + ti.Matrix.identity(float, DIMENSIONS) * la * J * (J - 1)
+
+    return stress
 @ti.kernel
 def substep():
     # if DIMENSIONS == 2:
@@ -133,11 +152,8 @@ def substep():
             
         # TODO: Below SVD can be replaced by reduced formulation for the simple fluid model
         U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
-       
-        # Compute Right Cauchy-Green tensor C
-        #RCG = F[p].transpose() @ F[p]
-        # Computing the Green strain tensor from deformation gradient: https://en.wikiversity.org/wiki/Continuum_mechanics/Strains_and_deformations
-        #strain = 0.5 * (F[p] + F[p].transpose()) - ti.Matrix.identity(ti.f32, 2)
+
+        stress = compute_stress(p)
 
         J = 1.0 # J = det(F) = particle volume ratio = V /Vo
         for d in ti.static(range(DIMENSIONS)):
@@ -164,14 +180,12 @@ def substep():
             J - 1
         )
 
-        # Cauchy Stress Tensor https://en.wikipedia.org/wiki/Cauchy_stress_tensor
-        #stress = 2 * mu * strain + ti.Matrix.identity(float, DIMENSIONS) * la * J * (J - 1)
 
         # Dp_inv = 3 * inv_dx * inv_dx # Applies only to BSpline Cubic kernel in APIC/MLS-MPM / maybe PolyPIC
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         affine = stress + p_mass * C[p]
-        
+
         for i, j in ti.static(ti.ndrange(3, 3)):
             # Loop over 3x3 grid node neighborhood
             offset = ti.Vector([i, j])
