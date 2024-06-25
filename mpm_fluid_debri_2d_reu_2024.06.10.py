@@ -87,6 +87,24 @@ attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
 ti.root.place(board_states)
 
+def update_material_properties():
+    # Hardening coefficient: snow gets harder when compressed
+    h = 1.0
+    if material[p] == 0: 
+        h = 1.0
+    if material[p] == 1:  # Fixed-Corotated Hyper-elastic material: broad debris / jelly / plastic behavior
+        h = 1.0 # Do not scale elastic moduli by default
+    if material[p] == 2:
+        h = 1.0
+    else:
+        h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p])))) # Don't calc this unless used, expensive operation
+
+    mu, la = mu_0 * h, lambda_0 * h # adjust elastic moduli based on hardening coefficient
+    if material[p] == 0:  # liquid 
+        mu = 0.0 # assumed no shear modulus...
+
+    return h, mu, la
+    
 @ti.kernel
 def substep():
     # if DIMENSIONS == 2:
@@ -105,23 +123,13 @@ def substep():
     for p in x:  # Particle state update and scatter to grid (P2G)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
-        # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
+        # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2] or Weights for MPM
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         # deformation gradient update
         F[p] = (ti.Matrix.identity(float, DIMENSIONS) + dt * C[p]) @ F[p]
-        # Hardening coefficient: snow gets harder when compressed
-        h = 1.0
-        if material[p] == 0: 
-            h = 1.0
-        if material[p] == 1:  # Fixed-Corotated Hyper-elastic material: broad debris / jelly / plastic behavior
-            h = 1.0 # Do not scale elastic moduli by default
-        if material[p] == 2:
-            h = 1.0
-        else:
-            h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p])))) # Don't calc this unless used, expensive operation
-        mu, la = mu_0 * h, lambda_0 * h # adjust elastic moduli
-        if material[p] == 0:  # liquid 
-            mu = 0.0 # assumed no shear modulus...
+        
+        # Hardening coefficient and Lame parameter updates
+        h, mu, la = update_material_properties()
             
         # TODO: Below SVD can be replaced by reduced formulation for the simple fluid model
         U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
@@ -163,6 +171,7 @@ def substep():
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         affine = stress + p_mass * C[p]
+        
         for i, j in ti.static(ti.ndrange(3, 3)):
             # Loop over 3x3 grid node neighborhood
             offset = ti.Vector([i, j])
@@ -170,6 +179,7 @@ def substep():
             weight = w[i][0] * w[j][1]
             grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
             grid_m[base + offset] += weight * p_mass
+
     for i, j in grid_m:
         if grid_m[i, j] > 0:  # No need for epsilon here
             # Momentum to velocity
@@ -185,6 +195,7 @@ def substep():
                 grid_v[i, j][1] = 0
             if j > n_grid - 3 and grid_v[i, j][1] > 0:
                 grid_v[i, j][1] = 0
+
     for p in x:  # grid to particle (G2P)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
@@ -200,12 +211,6 @@ def substep():
             new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
-        
-     # Apply boundary collisions
-     #   if x[p][1] < 0.1:  # Lower boundary
-     #       x[p][1] = 0.1
-     ##       if v[p][1] < 0:
-     #           v[p][1] = 0  # Stop downward velocity
 
         if x[p][1] > 0.25:  # Upper boundary
             x[p][1] = 0.25
