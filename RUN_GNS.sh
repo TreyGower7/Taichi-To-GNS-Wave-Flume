@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# Allows for the easy use of GNS
+# Create virtual environment with dependencies 
+#TMP_DIR="../"
+
+#virtualenv --python=python3.6 "${TMP_DIR}/gns/venv"
+#source "${TMP_DIR}/gns/venv/bin/activate"
 
 # Check if the directory gns-flume exists
 
