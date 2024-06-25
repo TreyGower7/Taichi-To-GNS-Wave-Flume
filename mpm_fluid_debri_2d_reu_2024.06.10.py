@@ -635,7 +635,7 @@ def downsample_particles(pos_data, mat_data):
 
 data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
-fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->
+fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
 gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
 
@@ -645,7 +645,8 @@ gui_background_color_white = 0xFFFFFF # White or black generally preferred for p
 gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes
 
 print("\nPress R to reset.")
-gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in the Material Point Method", res=n_grid, background_color=gui_background_color_white)
+gui_res = min(1080, n_grid) # Set the resolution of the GUI
+gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in the Material Point Method", res=gui_res, background_color=gui_background_color_white)
 reset()
 
 for frame in range(sequence_length):  
