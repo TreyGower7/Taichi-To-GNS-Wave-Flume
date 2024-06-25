@@ -51,10 +51,10 @@ n_particles = n_particles_base * (quality**DIMENSIONS)
 n_particles = 1000000
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
+
 print("Number of Particles: ", n_particles)
 print("Number of Grid-Nodes each Direction: ", n_grid_x, n_grid_y, n_grid_z)
 print("dx: ", dx)
-
 
 # Material properties
 particles_per_dx = 4
@@ -79,6 +79,10 @@ piston_pos = np.asarray(np.array([0.0, 0.0, 0.0])  \
             + (dx * np.array([4, 0, 0])), dtype=float) # Initial [X,Y,Z] position of the piston face
 piston_start_x = 4 * dx / grid_length
 piston_travel_x = piston_amplitude / grid_length
+
+print("Number of Particles: ", n_particles)
+print("Number of Grid-Nodes each Direction: ", n_grid)
+print("dx: ", dx)
 
 # Calc timestep based on elastic moduli of materials
 CFL = 0.5 # CFL stability number. Typically 0.3 - 0.5 is good
@@ -132,6 +136,47 @@ attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
 ti.root.place(board_states)
 
+@ti.func
+def update_material_properties(p):
+    # Hardening coefficient: snow gets harder when compressed
+    h = 1.0
+    if material[p] == 0: 
+        h = 1.0
+    if material[p] == 1:  # Fixed-Corotated Hyper-elastic material: broad debris / jelly / plastic behavior
+        h = 1.0 # Do not scale elastic moduli by default
+    if material[p] == 2:
+        h = 1.0
+    else:
+        h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p])))) # Don't calc this unless used, expensive operation
+
+    mu, la = mu_0 * h, lambda_0 * h # adjust elastic moduli based on hardening coefficient
+    if material[p] == 0:  # liquid 
+        mu = 0.0 # assumed no shear modulus...
+
+    return h, mu, la
+
+'''
+@ti.func
+def compute_stress(p):
+    """Computing stress in the particles using simple fluid formulation rather than SVD
+    
+    Args:
+        p: the current particle to be updated
+
+    Returns:
+        Stress: local stress state/tensor describing the particles stress from its surrundings
+
+    Non local continuum plasticity https://www.sciencedirect.com/science/article/pii/B9780128122365000025
+    """
+    # Compute Right Cauchy-Green tensor C
+    RCG = F[p].transpose() @ F[p]
+    # Computing the Green strain tensor from deformation gradient: https://en.wikiversity.org/wiki/Continuum_mechanics/Strains_and_deformations
+    strain = 0.5 * RCG - ti.Matrix.identity(ti.f32, 2) 
+     # Cauchy Stress Tensor https://en.wikipedia.org/wiki/Cauchy_stress_tensor
+    #stress = 2 * mu * strain + ti.Matrix.identity(float, DIMENSIONS) * la * J * (J - 1)
+
+    return stress
+'''
 @ti.kernel
 def substep():
     # if DIMENSIONS == 2:
@@ -150,27 +195,19 @@ def substep():
     for p in x:  # Particle state update and scatter to grid (P2G)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
-        # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2]
+        # Quadratic kernels  [http://mpm.graphics   Eqn. 123, with x=fx, fx-1,fx-2] or Weights for MPM
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         # deformation gradient update
         F[p] = (ti.Matrix.identity(float, DIMENSIONS) + dt * C[p]) @ F[p]
-        # Hardening coefficient: snow gets harder when compressed
-        h = 1.0
-        if material[p] == 0: 
-            h = 1.0
-        if material[p] == 1:  # Fixed-Corotated Hyper-elastic material: broad debris / jelly / plastic behavior
-            h = 1.0 # Do not scale elastic moduli by default
-        if material[p] == 2:
-            h = 1.0
-        else:
-            h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p])))) # Don't calc this unless used, expensive operation
-        mu, la = mu_0 * h, lambda_0 * h # adjust elastic moduli
-        if material[p] == 0:  # liquid 
-            mu = 0.0 # assumed no shear modulus...
+        
+        # Hardening coefficient and Lame parameter updates
+        h, mu, la = update_material_properties(p)
             
         # TODO: Below SVD can be replaced by reduced formulation for the simple fluid model
         U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
-        
+
+        #stress = compute_stress(p)
+
         J = 1.0 # J = det(F) = particle volume ratio = V /Vo
         for d in ti.static(range(DIMENSIONS)):
             new_sig = sig[d, d]
@@ -195,10 +232,13 @@ def substep():
         stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
             J - 1
         )
+
+
         # Dp_inv = 3 * inv_dx * inv_dx # Applies only to BSpline Cubic kernel in APIC/MLS-MPM / maybe PolyPIC
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         affine = stress + p_mass * C[p]
+
         for i, j in ti.static(ti.ndrange(3, 3)):
             # Loop over 3x3 grid node neighborhood
             offset = ti.Vector([i, j])
@@ -206,6 +246,7 @@ def substep():
             weight = w[i][0] * w[j][1]
             grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
             grid_m[base + offset] += weight * p_mass
+
     for i, j in grid_m:
         if grid_m[i, j] > 0:  # No need for epsilon here
             # Momentum to velocity
@@ -221,6 +262,7 @@ def substep():
                 grid_v[i, j][1] = 0
             if j > n_grid_y - 3 and grid_v[i, j][1] > 0:
                 grid_v[i, j][1] = 0
+
     for p in x:  # grid to particle (G2P)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
@@ -236,12 +278,6 @@ def substep():
             new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
-        
-     # Apply boundary collisions
-     #   if x[p][1] < 0.1:  # Lower boundary
-     #       x[p][1] = 0.1
-     ##       if v[p][1] < 0:
-     #           v[p][1] = 0  # Stop downward velocity
 
         # if x[p][1] > grid_length_y:  # Upper boundary
         #     x[p][1] = grid_length_y
@@ -428,10 +464,11 @@ def save_metadata():
     metadata = {
         "bounds": bounds,
         "sequence_length": sequence_length, 
-        "default_connectivity_radius": 0.015, 
+        "default_connectivity_radius": 0.5, 
         "dim": DIMENSIONS, 
-        "dt": dt, 
+        "dt": time_delta, 
         "dx": dx,
+        "critical_time_step": dt,
         "vel_mean": vel_mean, #[5.123277536458455e-06, -0.0009965205918140803], 
         "vel_std": vel_std, #[0.0021978993231675805, 0.0026653552458701774], 
         "acc_mean": acc_mean, #[5.237611158734309e-07, 2.3633027988858656e-07], 
@@ -456,6 +493,7 @@ def save_simulation():
         None
     """
     global data_designation
+    global data_to_save
     
     # Hardcode user path for now, may need to debug 
     query_user_name = False
@@ -472,40 +510,35 @@ def save_simulation():
         # Check if on local mac machine, temporary hardcode
         file_path = "/Users/" + user_name + "/code-REU/Physics-Informed-ML/dataset/"
     elif platform.system() == 'Windows':
-        # file_path = "C:/Users/" + uesr_name + "/Documents/Physics-Informed-ML/dataset/"
+        # file_path = "C:/Users/" + user_name + "/Documents/Physics-Informed-ML/dataset/"
         file_path = "./dataset/"
     else:
         file_path = "./dataset/"
-            
+
     # Ensure the directory exists
     directory = os.path.dirname(file_path)
+    
     if not os.path.exists(directory):
         os.makedirs(directory)
     # Should probably check if a file with the same name exists already and handle that
     # Maybe append a number to the end of the file name or something to prevent overwriting
-        
-    # Stack the data along a new axis for formatting
-    pos_data = np.stack(data_to_save, axis=0) if (np.version.version >= '1.22.0') else np.stack(np.asarray(data_to_save, dtype=object), axis=0) 
-    
     
     # I haven't checked the ID mapping FYI, may have errors
     material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, "Piston": 4, "Boundary": 5}
     material_id_dict_gns = { "Water": 5, "Rigid": 3, "Boundary": 5, "Piston": 8, "Sand": 6}
     
-    #replacing material data with Dr. Kumars material ids
-    # material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
+
+
     material_numpy = material.to_numpy()
-    material_data = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
-    # material_data = np.where(material.to_numpy() == 0 or material.to_numpy() == 5, np.array(material, dtype=int))
-    
-    # Combine arrays into a single dictionary
-    # simulation_data = {
-    #     'simulation_0': (
-    #         pos_data,
-    #         np.array(material_data.tolist())
-    #     )
-    # }
-    
+    mat_data = np.where(material_numpy == 0, material_id_dict['Water'], material_numpy)
+    mat_data_tmp = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
+
+    mat_data = np.asarray(mat_data_tmp, dtype=object)
+    pos_data = np.stack(data_to_save, axis=0)
+
+     # Perform downsampling for GNS    
+    downsampled_data, downsampled_mat_data = downsample_particles(pos_data_output, mat_data_output)
+
     # Check version of numpy >= 1.22.0, roughly when numpy updated to deprecate ragged arrays in npz files (but allow structured?)
     # 
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
@@ -514,20 +547,20 @@ def save_simulation():
     # python3 -m pip install --upgrade numpy==1.21.1 # Downgrade numpy to 1.21.1 with terminal command for python3
     if (np.version.version >= '1.22.0'):
         print("Using numpy version (>= 1.22.0), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
-        pos_data = np.array(np.stack(np.asarray(data_to_save, dtype=object), axis=0), dtype=object)
-        mat_data = np.asarray(material_data, dtype=object)
+        pos_data_output = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
+        mat_data_output = np.asarray(downsampled_mat_data, dtype=object)
     else:
         print("Warning: Using numpy version: ", np.version.version)
-        pos_data = np.array(np.stack(data_to_save, axis=0), dtype=object)
-        mat_data = np.asarray(material_data, dtype=object)
-        # np.array(material_data.tolist())
+        pos_data_output = np.array(np.stack(downsampled_data, axis=0), dtype=np.float32)
+        mat_data_output = np.asarray(downsampled_mat_data, dtype=object)
+        # np.array(material_data.tolist()) 
     
-    print("pos_data: ", pos_data.shape)
-    print("mat_data: ", mat_data.shape)
+    print("pos_data_output: ", pos_data_output.shape)
+    print("mat_data_output: ", mat_data_output.shape)
     simulation_data = {
         'simulation_0': (
-            pos_data,
-            material_data
+            pos_data_output,
+            mat_data_output
         )
     }
     
@@ -558,19 +591,61 @@ def save_simulation():
     print("Simulation Data Saved to: ", file_path)
     
 # Define a Taichi field to store the result
+ # may have a bug related to use of 'pos_data' and 'mat_data' variables names, could cause mutability issues
+def downsample_particles(pos_data, mat_data):
+    """Downsample particle and material data by averaging over n particles
+    
+    Args:
+        data: numpy array of particle data with shape=(ntimestep, nnodes, ndims).
+        mat_data: numpy array of material IDs with shape=(num_particles,).
+    
+    Returns:
+        downsampled_data: Downsampled particle data.
+        downsampled_mat: Downsampled material IDs.
+    """
+    #Stack data
+    
+    k = 4 # Scaling Factor
+
+    # ensuring data is downsampled enough for gns
+    while True:
+        if n_particles/k > 100:
+            k += 1
+            print(n_particles/k)
+            #continue
+        else:
+            #k -=1
+            print(n_particles/k)
+            print(f'downsampling by averaging over n = {k} particles')
+            break
+    print(pos_data.shape)
+
+    # Reshape the array to group particles together
+    reshaped = pos_data.reshape(pos_data.shape[0], pos_data.shape[1] // k, k, pos_data.shape[2])
+    # Downsample material data using decimation
+    downsampled_mat = mat_data[::k]
+    # Average over the new third dimension
+    downsampled_data = np.mean(reshaped, axis=2)
+    print(downsampled_data.shape)
+    
+    return downsampled_data, downsampled_mat
 
 
 #Simulation Prerequisites 
-data_designation = str(input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> '))
-sequence_length = int(input('How many time steps to simulate? --> '))
+
+data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
+# sequence_length = int(input('How many time steps to simulate? --> ')) 
+fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->
+sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
 gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
+
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
 
 gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
 gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes
 
 print("\nPress R to reset.")
-gui = ti.GUI("Taichi MPM-With-Piston", res=n_grid, background_color=gui_background_color_white)
+gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in the Material Point Method", res=n_grid, background_color=gui_background_color_white)
 reset()
 
 for frame in range(sequence_length):  
@@ -585,16 +660,21 @@ for frame in range(sequence_length):
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
     for s in range(int((1.0/fps) // dt)): # Will need to double-check the use of 2e-3, dt, etc
         substep()
+
         move_board_solitary()
-        time += dt
+        time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
         
     # time += time_delta / 100
     # time = frame * time_delta
     print(f't = {round(time,3)}')
+
     
-    # Export positions/velocities to lists
+    #Change to tiachi fields probably
     data_to_save.append(x.to_numpy())
     v_data_to_save.append(v.to_numpy())
+
+    # time += time_delta
+    print(f't = {round(time,3)}')
     
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     gui.circles(

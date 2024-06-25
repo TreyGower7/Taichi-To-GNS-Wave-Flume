@@ -264,16 +264,6 @@ def render(gui):
         pos_np[:, j] *= screen_to_world_ratio / screen_res[j]
     gui.circles(pos_np, radius=particle_radius, color=particle_color)
 
-    # Render the block
-    block_pos = block_position * screen_to_world_ratio / np.array(screen_res)
-    block_size_scaled = block_size * screen_to_world_ratio / np.array(screen_res)
-    gui.rect(
-        (block_pos[0] - 0.5 * block_size_scaled[0], block_pos[1] - 0.5 * block_size_scaled[1]),
-        (block_pos[0] + 0.5 * block_size_scaled[0], block_pos[1] + 0.5 * block_size_scaled[1]),
-        radius=1.5,
-        color=0xFF5733  # Choose any color for the block
-    )
-
     # Render the boundary
     gui.rect(
         (0, 0),
