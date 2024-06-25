@@ -87,7 +87,8 @@ attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
 ti.root.place(board_states)
 
-def update_material_properties():
+@ti.func
+def update_material_properties(p):
     # Hardening coefficient: snow gets harder when compressed
     h = 1.0
     if material[p] == 0: 
@@ -105,6 +106,8 @@ def update_material_properties():
 
     return h, mu, la
 
+'''
+@ti.func
 def compute_stress(p):
     """Computing stress in the particles using simple fluid formulation rather than SVD
     
@@ -113,7 +116,7 @@ def compute_stress(p):
 
     Returns:
         Stress: local stress state/tensor describing the particles stress from its surrundings
-        
+
     Non local continuum plasticity https://www.sciencedirect.com/science/article/pii/B9780128122365000025
     """
     # Compute Right Cauchy-Green tensor C
@@ -124,6 +127,7 @@ def compute_stress(p):
     #stress = 2 * mu * strain + ti.Matrix.identity(float, DIMENSIONS) * la * J * (J - 1)
 
     return stress
+'''
 @ti.kernel
 def substep():
     # if DIMENSIONS == 2:
@@ -148,12 +152,12 @@ def substep():
         F[p] = (ti.Matrix.identity(float, DIMENSIONS) + dt * C[p]) @ F[p]
         
         # Hardening coefficient and Lame parameter updates
-        h, mu, la = update_material_properties()
+        h, mu, la = update_material_properties(p)
             
         # TODO: Below SVD can be replaced by reduced formulation for the simple fluid model
         U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
 
-        stress = compute_stress(p)
+        #stress = compute_stress(p)
 
         J = 1.0 # J = det(F) = particle volume ratio = V /Vo
         for d in ti.static(range(DIMENSIONS)):
@@ -521,7 +525,7 @@ def save_simulation():
     
 # Define a Taichi field to store the result
 
-def downsample_particles(data, mat_data):
+def downsample_particles(pos_data, mat_data):
     """Downsample particle and material data by averaging over n particles
     
     Args:
@@ -534,25 +538,29 @@ def downsample_particles(data, mat_data):
     """
     #Stack data
     
-    k = particles_per_dx # Scaling Factor
+    k = 4 # Scaling Factor
 
     # ensuring data is downsampled enough for gns
     while True:
-        if n_particles/k > 7000 & data[1].size % k == 0:
+        if n_particles/k > 100:
             k += 1
-            continue
+            print(n_particles/k)
+            #continue
         else:
-            k -=1
+            #k -=1
+            print(n_particles/k)
             print(f'downsampling by averaging over n = {k} particles')
             break
-    
+    print(pos_data.shape)
+
     # Reshape the array to group particles together
-    reshaped = data.reshape(data.shape[0], data.shape[1] // k, k, data.shape[2])
+    reshaped = pos_data.reshape(pos_data.shape[0], pos_data.shape[1] // k, k, pos_data.shape[2])
     # Downsample material data using decimation
     downsampled_mat = mat_data[::k]
     # Average over the new third dimension
     downsampled_data = np.mean(reshaped, axis=2)
-        
+    print(downsampled_data.shape)
+    
     return downsampled_data, downsampled_mat
 
 
