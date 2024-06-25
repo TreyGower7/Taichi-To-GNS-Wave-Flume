@@ -440,14 +440,10 @@ def save_simulation():
     # Should probably check if a file with the same name exists already and handle that
     # Maybe append a number to the end of the file name or something to prevent overwriting
     
-    # Maybe have a dictionary/enum for this, I haven't checked the ID mapping FYI
-    material_id_dict = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3}
+    material_id_dict = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
      
-    #replacing material data with Dr. Kumars material ids
-    #material_data = np.where(material_numpy == 0, 5 + (0 * material_numpy), material_numpy)
-
     material_numpy = material.to_numpy()
-    mat_data = np.where(material.to_numpy() == 0, material_id_dict['Water'], material.to_numpy())
+    mat_data = np.where(material_numpy == 0, material_id_dict['Water'], material_numpy)
 
     mat_data = np.asarray(mat_data, dtype=object)
     pos_data = np.stack(data_to_save, axis=0)
@@ -530,10 +526,6 @@ def downsample_particles(data, mat_data):
             k -=1
             print(f'downsampling by averaging over n = {k} particles')
             break
-
-    # Ensure the second dimension is divisible by n
-    if data.shape[1] % k != 0:
-        raise ValueError("The second dimension size must be divisible by the number of particles to average.")
     
     # Reshape the array to group particles together
     reshaped = data.reshape(data.shape[0], data.shape[1] // k, k, data.shape[2])
