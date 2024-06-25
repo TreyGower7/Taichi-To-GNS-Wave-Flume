@@ -127,7 +127,7 @@ def substep():
         U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
        
         # Compute Right Cauchy-Green tensor C
-        #C = F[p].transpose() @ F[p]
+        #RCG = F[p].transpose() @ F[p]
         # Computing the Green strain tensor from deformation gradient: https://en.wikiversity.org/wiki/Continuum_mechanics/Strains_and_deformations
         #strain = 0.5 * (F[p] + F[p].transpose()) - ti.Matrix.identity(ti.f32, 2)
 
