@@ -17,14 +17,9 @@ quality =  3 # Use a larger value for higher-res simulations
 n_grid_base = 128
 n_grid = n_grid_base * quality
 dx, inv_dx = 1 / (n_grid), float(n_grid)
-n_particles_water = (0.9 * 0.2) * n_grid_base**2
-n_particles_base = 2048*4 # Better ways to do this, shouldnt have to set it manually
+n_particles_water = (0.9 * 0.5) * n_grid_base**2
+n_particles_base = 2048*2 # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * quality**DIMENSIONS
-
-print("Number of Particles: ", n_particles)
-print("Number of Grid-Nodes each Direction: ", n_grid)
-print("dx: ", dx)
-
 
 # Material properties
 particles_per_dx = 4
@@ -35,6 +30,10 @@ p_mass = p_vol * p_rho
 E, nu = 2e4, 0.2  # Young's modulus and Poisson's ratio
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 time_delta = 1.0 / 20.0
+
+print("Number of Particles: ", n_particles)
+print("Number of Grid-Nodes each Direction: ", n_grid)
+print("dx: ", dx)
 
 # Calc timestep based on elastic moduli of materials
 CFL = 0.5 # CFL stability number. Typically 0.3 - 0.5 is good
@@ -126,7 +125,12 @@ def substep():
             
         # TODO: Below SVD can be replaced by reduced formulation for the simple fluid model
         U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
-        
+       
+        # Compute Right Cauchy-Green tensor C
+        #C = F[p].transpose() @ F[p]
+        # Computing the Green strain tensor from deformation gradient: https://en.wikiversity.org/wiki/Continuum_mechanics/Strains_and_deformations
+        #strain = 0.5 * (F[p] + F[p].transpose()) - ti.Matrix.identity(ti.f32, 2)
+
         J = 1.0 # J = det(F) = particle volume ratio = V /Vo
         for d in ti.static(range(DIMENSIONS)):
             new_sig = sig[d, d]
@@ -151,6 +155,10 @@ def substep():
         stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
             J - 1
         )
+
+        # Cauchy Stress Tensor https://en.wikipedia.org/wiki/Cauchy_stress_tensor
+        #stress = 2 * mu * strain + ti.Matrix.identity(float, DIMENSIONS) * la * J * (J - 1)
+
         # Dp_inv = 3 * inv_dx * inv_dx # Applies only to BSpline Cubic kernel in APIC/MLS-MPM / maybe PolyPIC
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
@@ -375,7 +383,7 @@ def save_metadata():
     metadata = {
         "bounds": bounds,
         "sequence_length": sequence_length, 
-        "default_connectivity_radius": 0.015, 
+        "default_connectivity_radius": 0.5, 
         "dim": 2, 
         "dt": 0.0025, 
         "vel_mean": vel_mean, #[5.123277536458455e-06, -0.0009965205918140803], 
@@ -402,6 +410,7 @@ def save_simulation():
         None
     """
     global data_designation
+    global data_to_save
     
     # Hardcode user path for now, may need to debug 
     query_user_name = False
@@ -418,58 +427,54 @@ def save_simulation():
         # Check if on local mac machine, temporary hardcode
         file_path = "/Users/" + user_name + "/code-REU/Physics-Informed-ML/dataset/"
     elif platform.system() == 'Windows':
-        # file_path = "C:/Users/" + uesr_name + "/Documents/Physics-Informed-ML/dataset/"
+        # file_path = "C:/Users/" + user_name + "/Documents/Physics-Informed-ML/dataset/"
         file_path = "./dataset/"
     else:
         file_path = "./dataset/"
-            
+
     # Ensure the directory exists
     directory = os.path.dirname(file_path)
+    
     if not os.path.exists(directory):
         os.makedirs(directory)
     # Should probably check if a file with the same name exists already and handle that
     # Maybe append a number to the end of the file name or something to prevent overwriting
-        
-    # Stack the data along a new axis for formatting
-    pos_data = np.stack(data_to_save, axis=0) if (np.version.version >= '1.22.0') else np.stack(np.asarray(data_to_save, dtype=object), axis=0) 
-    
     
     # Maybe have a dictionary/enum for this, I haven't checked the ID mapping FYI
-    # material_id_dict = { "Water": 0, "Sand": 1, "Debris": 3, "Piston": 4, "Boundary": 5}
+    material_id_dict = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3}
      
     #replacing material data with Dr. Kumars material ids
-    # material_data = np.where(material.to_numpy() == 0, 5, material.to_numpy())
+    #material_data = np.where(material_numpy == 0, 5 + (0 * material_numpy), material_numpy)
+
     material_numpy = material.to_numpy()
-    material_data = np.where(material_numpy == 0, 5 + (0 * material_numpy), material_numpy)
-    # material_data = np.where(material.to_numpy() == 0 or material.to_numpy() == 5, np.array(material, dtype=int))
-    
-    # Combine arrays into a single dictionary
-    # simulation_data = {
-    #     'simulation_0': (
-    #         pos_data,
-    #         np.array(material_data.tolist())
-    #     )
-    # }
+    mat_data = np.where(material.to_numpy() == 0, material_id_dict['Water'], material.to_numpy())
+
+    mat_data = np.asarray(mat_data, dtype=object)
+    pos_data = np.stack(data_to_save, axis=0)
+
+     # Perform downsampling for GNS    
+    downsampled_data, downsampled_mat_data = downsample_particles(pos_data, mat_data)
+
     #check version of numpy >= 1.22.0
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
     # Should add a check for the python version as well
-    # mat_data = np.array(material_data.tolist(), dtype=object) if (np.version.version >= '1.22.0') else np.array(material_data.tolist())
+
     if (np.version.version >= '1.22.0'):
         print("Using numpy version (>= 1.22.0), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
-        pos_data = np.array(np.stack(np.asarray(data_to_save, dtype=object), axis=0), dtype=object)
-        mat_data = np.asarray(material_data, dtype=object)
+        pos_data = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
+        mat_data = np.asarray(downsampled_mat_data, dtype=object)
     else:
         print("Warning: Using numpy version: ", np.version.version)
-        pos_data = np.array(np.stack(data_to_save, axis=0), dtype=object)
-        mat_data = np.asarray(material_data, dtype=object)
-        # np.array(material_data.tolist())
+        pos_data = np.array(np.stack(downsampled_data, axis=0), dtype=np.float32)
+        mat_data = np.asarray(downsampled_mat_data, dtype=object)
+        # np.array(material_data.tolist()) 
     
     print("pos_data: ", pos_data.shape)
     print("mat_data: ", mat_data.shape)
     simulation_data = {
         'simulation_0': (
             pos_data,
-            material_data
+            mat_data
         )
     }
     
@@ -501,10 +506,47 @@ def save_simulation():
     
 # Define a Taichi field to store the result
 
+def downsample_particles(data, mat_data):
+    """Downsample particle and material data by averaging over n particles
+    
+    Args:
+        data: numpy array of particle data with shape=(ntimestep, nnodes, ndims).
+        mat_data: numpy array of material IDs with shape=(num_particles,).
+    
+    Returns:
+        downsampled_data: Downsampled particle data.
+        downsampled_mat: Downsampled material IDs.
+    """
+    #Stack data
+    
+    n = particles_per_dx
+
+    # ensuring data is downsampled enough for gns
+    while True:
+        n += 1
+        if n_particles >= 7000 and data[1].size % n != 0:
+            continue
+        else:
+            print(f'downsampling by averaging over n = {n} particles')
+            break
+
+    # Ensure the second dimension is divisible by n
+    if data.shape[1] % n != 0:
+        raise ValueError("The second dimension size must be divisible by the number of particles to average.")
+    
+    # Reshape the array to group particles together
+    reshaped = data.reshape(data.shape[0], data.shape[1] // n, n, data.shape[2])
+    # Downsample material data using decimation
+    downsampled_mat = mat_data[::n]
+    # Average over the new third dimension
+    downsampled_data = np.mean(reshaped, axis=2)
+        
+    return downsampled_data, downsampled_mat
+
 
 #Simulation Prerequisites 
-data_designation = str(input('Simulation Purpose: Rollout(R), Train(T), Valid(V) --> '))
-sequence_length = int(input('How many time steps to simulate? --> '))
+data_designation = str(input('Simulation Data Purpose: Rollout(R), Train(T), Valid(V) --> '))
+sequence_length = int(input('How many seconds to run simulation for? --> ')) * 20
 gravity[None] = [0, -9.81] # Gravity in m/s^2, this implies use of metric units
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
 
@@ -527,14 +569,15 @@ for frame in range(sequence_length):
     for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
         substep()
         #move_board()
-        
         move_board_solitary()
-    time += time_delta
-    print(f't = {round(time,3)}')
+
     
-    # Export positions/velocities to lists
+    #Change to tiachi fields probably
     data_to_save.append(x.to_numpy())
     v_data_to_save.append(v.to_numpy())
+
+    time += time_delta
+    print(f't = {round(time,3)}')
     
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     gui.circles(
