@@ -68,6 +68,8 @@ particle_volume = (dx ** DIMENSIONS) * particle_volume_ratio
 p_vol, p_rho = particle_volume, 1000.0
 p_mass = p_vol * p_rho
 E, nu = 1e7, 0.2  # Young's modulus and Poisson's ratio
+# TODO: Define material laws for various materials
+gamma_water = 7.15 #Ratio of specific heats for water 
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 fps = 20
 time_delta = 1.0 / fps
@@ -79,10 +81,6 @@ piston_pos = np.asarray(np.array([0.0, 0.0, 0.0])  \
             + (dx * np.array([4, 0, 0])), dtype=float) # Initial [X,Y,Z] position of the piston face
 piston_start_x = 4 * dx / grid_length
 piston_travel_x = piston_amplitude / grid_length
-
-print("Number of Particles: ", n_particles)
-print("Number of Grid-Nodes each Direction: ", n_grid)
-print("dx: ", dx)
 
 # Calc timestep based on elastic moduli of materials
 CFL = 0.5 # CFL stability number. Typically 0.3 - 0.5 is good
@@ -132,8 +130,10 @@ grid_tuple = (n_grid_x, n_grid_y) #if DIMENSIONS == 2 else  (n_grid, n_grid, n_g
 grid_v = ti.Vector.field(DIMENSIONS, dtype=float, shape=grid_tuple)  # grid node momentum/velocity
 grid_m = ti.field(dtype=float, shape=grid_tuple)  # grid node mass
 gravity = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
-attractor_strength = ti.field(dtype=float, shape=())
-attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
+#attractor_strength = ti.field(dtype=float, shape=())
+#attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
+#pressure = ti.field(dtype=ti.f32, shape=n_particles)  # Pressure field
+pressure = 0
 ti.root.place(board_states)
 
 @ti.func
@@ -155,28 +155,6 @@ def update_material_properties(p):
 
     return h, mu, la
 
-'''
-@ti.func
-def compute_stress(p):
-    """Computing stress in the particles using simple fluid formulation rather than SVD
-    
-    Args:
-        p: the current particle to be updated
-
-    Returns:
-        Stress: local stress state/tensor describing the particles stress from its surrundings
-
-    Non local continuum plasticity https://www.sciencedirect.com/science/article/pii/B9780128122365000025
-    """
-    # Compute Right Cauchy-Green tensor C
-    RCG = F[p].transpose() @ F[p]
-    # Computing the Green strain tensor from deformation gradient: https://en.wikiversity.org/wiki/Continuum_mechanics/Strains_and_deformations
-    strain = 0.5 * RCG - ti.Matrix.identity(ti.f32, 2) 
-     # Cauchy Stress Tensor https://en.wikipedia.org/wiki/Cauchy_stress_tensor
-    #stress = 2 * mu * strain + ti.Matrix.identity(float, DIMENSIONS) * la * J * (J - 1)
-
-    return stress
-'''
 @ti.kernel
 def substep():
     # if DIMENSIONS == 2:
@@ -203,19 +181,24 @@ def substep():
         # Hardening coefficient and Lame parameter updates
         h, mu, la = update_material_properties(p)
             
-        # TODO: Below SVD can be replaced by reduced formulation for the simple fluid model
-        U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
+        #U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
 
-        #stress = compute_stress(p)
+        J = ti.math.determinant(F[p])  #particle volume ratio = V /Vo
+        # J=1 undeformed material; J<1 compressed material; J>1 expanded material
+        
+        # may need to reformulate since we want as close to water incompressability as possible
+        # Useful paper https://www.sciencedirect.com/science/article/pii/S2590055219300319
+        pressure = bulk_modulus*( (J**-gamma_water) - 1 ) #Tait formulation for weakly compressible fluid (isentropic)
+        # pressure = bulk_modulus*( (1/J) - 1 ) #Pressure for solid 
 
-        J = 1.0 # J = det(F) = particle volume ratio = V /Vo
-        for d in ti.static(range(DIMENSIONS)):
-            new_sig = sig[d, d]
-            if material[p] == 2:  # Snow-like material
-                new_sig = min(max(sig[d, d], 1 - 2.5e-2), 1 + 4.5e-3)  # Plasticity
-            Jp[p] *= sig[d, d] / new_sig # stable?
-            sig[d, d] = new_sig
-            J *= new_sig
+        #J = 1.0
+        #for d in ti.static(range(DIMENSIONS)):
+        #    new_sig = sig[d, d]
+        #    if material[p] == 2:  # Snow-like material
+        #        new_sig = min(max(sig[d, d], 1 - 2.5e-2), 1 + 4.5e-3)  # Plasticity
+        #    Jp[p] *= sig[d, d] / new_sig # stable?
+        #    sig[d, d] = new_sig
+        #    J *= new_sig
         if material[p] == 0: # water
             # Reset deformation gradient to avoid numerical instability
             # if DIMENSIONS == 2:
@@ -225,19 +208,20 @@ def substep():
             # else:
                 # ti.static_print("Error: Invalid number of DIMENSIONS")
             
-        elif material[p] == 2:
+       # elif material[p] == 2:
             # Reconstruct elastic deformation gradient after plasticity
-            F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
+       #     F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
         
-        stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
-            J - 1
-        )
-
+        #stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
+        #    J - 1
+        #)
 
         # Dp_inv = 3 * inv_dx * inv_dx # Applies only to BSpline Cubic kernel in APIC/MLS-MPM / maybe PolyPIC
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
-        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-        affine = stress + p_mass * C[p]
+        #stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
+        #affine = stress + p_mass * C[p]
+        affine = pressure[p] + p_mass * C[p] #Using pressure instead
+        #print(stress)
 
         for i, j in ti.static(ti.ndrange(3, 3)):
             # Loop over 3x3 grid node neighborhood
