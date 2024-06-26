@@ -190,7 +190,6 @@ def substep():
         # Useful paper https://www.sciencedirect.com/science/article/pii/S2590055219300319
         pressure = bulk_modulus*( (J**-gamma_water) - 1 ) #Tait formulation for weakly compressible fluid (isentropic)
         # pressure = bulk_modulus*( (1/J) - 1 ) #Pressure for solid 
-
         #J = 1.0
         #for d in ti.static(range(DIMENSIONS)):
         #    new_sig = sig[d, d]
@@ -220,7 +219,8 @@ def substep():
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         #stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         #affine = stress + p_mass * C[p]
-        affine = pressure[p] + p_mass * C[p] #Using pressure instead
+        #affine = pressure + p_mass * C[p] #Using pressure instead
+        affine = pressure * F[p].inverse().transpose() + p_mass * C[p]
         #print(stress)
 
         for i, j in ti.static(ti.ndrange(3, 3)):
