@@ -75,6 +75,7 @@ fps = 20
 time_delta = 1.0 / fps
 pressure = 0.0
 min_pressure = -1.0e6  # min pressure to prevent excessive negative pressure values
+stress_list = []
 
 
 piston_amplitude = float(3.6) # 4 meters max range on piston's stroke in the OSU LWF
@@ -137,6 +138,11 @@ gravity = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
 #pressure = ti.field(dtype=ti.f32, shape=n_particles)  # Pressure field
 ti.root.place(board_states)
 
+#Future class for different complex materials possibly??
+#class material_models():
+#    def __init__(self) -> None:
+
+
 @ti.func
 def update_material_properties(p):
     # Hardening coefficient: snow gets harder when compressed
@@ -156,6 +162,87 @@ def update_material_properties(p):
 
     return h, mu, la
 
+
+@ti.func
+def neo_hookean_model(h, mu, la, F, J):
+    """Due to waters near incompressibility we can treat it as a near-incompressible hyperelastic material
+
+    Args:
+        h: Hardening Coefficient
+        mu: Shear modulus lame parameter
+        la: First Lame parameter (bulk modulus in this context)
+        F: Deformation gradient for a single particle
+    Returns:
+
+    """
+    K = la
+    C = F.transpose() @ F # Left Cauchy Green Tensor
+    I1 = C.trace() # Trace of Left Cauchy Green Tensor
+    nhstrain = ( mu/2 ) * ( I1 - 3 ) + ( K/2 ) * ( ti.math.log(J)**2 )
+
+    return nhstrain
+
+@ti.func
+def compute_stress_svd(p, mu, la):
+    """Computing stress using svd 
+    Args:
+        mu: Shear modulus lame parameter
+        la: First Lame parameter (bulk modulus in this context)
+        p: Current particle index
+
+    Returns:
+        stress: Cauchy stress tensor
+    """
+
+    U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
+
+    #J = 1.0
+    for d in ti.static(range(DIMENSIONS)):
+        new_sig = sig[d, d]
+        if material[p] == 2:  # Snow-like material
+            new_sig = min(max(sig[d, d], 1 - 2.5e-2), 1 + 4.5e-3)  # Plasticity
+        Jp[p] *= sig[d, d] / new_sig # stable?
+        sig[d, d] = new_sig
+        J *= new_sig
+
+    if material[p] == 2:
+        # Reconstruct elastic deformation gradient after plasticity
+        F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
+    
+        stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
+            J - 1
+        )
+        return stress
+
+
+@ti.func
+def compute_stress(mu, la, F):
+    """Computes Cauchy stress tensor for a near-incompressible Neo-Hookean material 
+    (can also use strain energy density function)
+
+    Args:
+        mu: Shear modulus lame parameter
+        la: First Lame parameter (bulk modulus in this context)
+        F: Deformation gradient for a single particle
+
+    Returns:
+        stress: Cauchy stress tensor
+    """
+    J = ti.math.determinant(F)
+    K = la
+    FinvT = F.inverse().transpose()
+    
+    # First Piola-Kirchhoff stress tensor (P)
+    P = mu * (F - FinvT) + K * ti.math.log(J) * FinvT
+
+    # Neo-hookean strain energy density function
+    # nh_strain = neo_hookean_model( h, mu, la, F, J) 
+    
+    # Cauchy stress tensor (denoted by sigma)
+    stress = (1 / J) * P @ F.transpose()
+    
+    return stress
+
 @ti.kernel
 def substep():
     # if DIMENSIONS == 2:
@@ -169,7 +256,7 @@ def substep():
     # else:
         # ti.static_print("Error: Invalid number of DIMENSIONS")
         
-    # We will need to detangle these material laws into their own functions / objects
+    # TODO: Detangle/define more material laws into their own functions / objects
     # Taichi did things improperly here 
     for p in x:  # Particle state update and scatter to grid (P2G)
         base = (x[p] * inv_dx - 0.5).cast(int)
@@ -181,33 +268,17 @@ def substep():
 
         # Hardening coefficient and Lame parameter updates
         h, mu, la = update_material_properties(p)
-            
-        #U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
-        
+
         # J=1 undeformed material; J<1 compressed material; J>1 expanded material
         J = ti.math.determinant(F[p])  #particle volume ratio = V /Vo
 
-        # Pressure calculation based on volume ratio J
-        # may need to reformulate since we want as close to water incompressability as possible
-        if material[p] == 0:  # Water-like material (May need different formulation)
-            pressure = bulk_modulus * ( (1 / J**gamma_water) - 1 )  # Pressure for weakly compressible fluid
-            pressure = max(pressure, min_pressure)  # prevent excessive negative pressure
+        #N eo-hookean formulation for Cauchy stress from first Piola-Kirchoff stress
+        stress = compute_stress(mu, la, F[p])
 
-        else: # solid-like material
-            pressure = bulk_modulus * ( (1 / J) - 1 )
+        # stress = compute_stress_svd(p, mu, la) #Passing in p since F is getting updated
 
-        # Useful paper https://www.sciencedirect.com/science/article/pii/S2590055219300319
-
-        #J = 1.0
-        #for d in ti.static(range(DIMENSIONS)):
-        #    new_sig = sig[d, d]
-        #    if material[p] == 2:  # Snow-like material
-        #        new_sig = min(max(sig[d, d], 1 - 2.5e-2), 1 + 4.5e-3)  # Plasticity
-        #    Jp[p] *= sig[d, d] / new_sig # stable?
-        #    sig[d, d] = new_sig
-        #    J *= new_sig
+        # Reset deformation gradient to avoid numerical instability
         if material[p] == 0: # water
-            # Reset deformation gradient to avoid numerical instability
             # if DIMENSIONS == 2:
             F[p] = ti.Matrix.identity(float, DIMENSIONS) * ti.sqrt(J)
             # elif DIMENSIONS == 3:
@@ -215,22 +286,11 @@ def substep():
             # else:
                 # ti.static_print("Error: Invalid number of DIMENSIONS")
             
-       # elif material[p] == 2:
-            # Reconstruct elastic deformation gradient after plasticity
-        #    F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
-        
-        #stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
-        #    J - 1
-        #)
-
         # Dp_inv = 3 * inv_dx * inv_dx # Applies only to BSpline Cubic kernel in APIC/MLS-MPM / maybe PolyPIC
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
-        #stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-        #affine = stress + p_mass * C[p]
-    # Apply pressure to the affine transformation
-        pressure_term = -pressure * F[p].inverse().transpose()
-        affine = pressure_term + p_mass * C[p]
-    
+        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
+        affine = stress + p_mass * C[p]
+
         for i, j in ti.static(ti.ndrange(3, 3)):
             # Loop over 3x3 grid node neighborhood
             offset = ti.Vector([i, j])
@@ -615,10 +675,12 @@ for frame in range(sequence_length):
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
     for s in range(int((1.0/fps) // dt)): # Will need to double-check the use of 2e-3, dt, etc
         substep()
-
         move_board_solitary()
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
-        
+    # After the substep:
+    print("Stress values:")
+    for stress in stress_list:
+        print(stress)
     # time += time_delta / 100
     # time = frame * time_delta
     print(f't = {round(time,3)}')
