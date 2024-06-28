@@ -73,6 +73,9 @@ gamma_water = 7.15 #Ratio of specific heats for water
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 fps = 20
 time_delta = 1.0 / fps
+pressure = 0.0
+min_pressure = -1.0e6  # min pressure to prevent excessive negative pressure values
+
 
 piston_amplitude = float(3.6) # 4 meters max range on piston's stroke in the OSU LWF
 piston_period = float(180.0)
@@ -112,13 +115,12 @@ time = 0.0
 #Define some parameters we would like to track
 data_to_save = [] #used for saving positional data for particles 
 v_data_to_save = []
-bounds = [[0.1, 0.9], [0.1, 0.9]]
+bounds = [[0.0, 0.9], [0.0, 0.5]]
 # bounds = [[0.1, 0.9], [0.1, 0.9], [0.1, 0.9]] # For 3D
 vel_mean = []
 vel_std = []
 acc_mean = []
 acc_std = []
-
 
 x = ti.Vector.field(DIMENSIONS, dtype=float, shape=n_particles)  # position
 v = ti.Vector.field(DIMENSIONS, dtype=float, shape=n_particles)  # velocity
@@ -133,7 +135,6 @@ gravity = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
 #attractor_strength = ti.field(dtype=float, shape=())
 #attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
 #pressure = ti.field(dtype=ti.f32, shape=n_particles)  # Pressure field
-pressure = 0
 ti.root.place(board_states)
 
 @ti.func
@@ -177,19 +178,26 @@ def substep():
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         # deformation gradient update
         F[p] = (ti.Matrix.identity(float, DIMENSIONS) + dt * C[p]) @ F[p]
-        
+
         # Hardening coefficient and Lame parameter updates
         h, mu, la = update_material_properties(p)
             
         #U, sig, V = ti.svd(F[p]) # Singular Value Decomposition of deformation gradient (on particle)
-
-        J = ti.math.determinant(F[p])  #particle volume ratio = V /Vo
-        # J=1 undeformed material; J<1 compressed material; J>1 expanded material
         
+        # J=1 undeformed material; J<1 compressed material; J>1 expanded material
+        J = ti.math.determinant(F[p])  #particle volume ratio = V /Vo
+
+        # Pressure calculation based on volume ratio J
         # may need to reformulate since we want as close to water incompressability as possible
+        if material[p] == 0:  # Water-like material (May need different formulation)
+            pressure = bulk_modulus * ( (1 / J**gamma_water) - 1 )  # Pressure for weakly compressible fluid
+            pressure = max(pressure, min_pressure)  # prevent excessive negative pressure
+
+        else: # solid-like material
+            pressure = bulk_modulus * ( (1 / J) - 1 )
+
         # Useful paper https://www.sciencedirect.com/science/article/pii/S2590055219300319
-        pressure = bulk_modulus*( (J**-gamma_water) - 1 ) #Tait formulation for weakly compressible fluid (isentropic)
-        # pressure = bulk_modulus*( (1/J) - 1 ) #Pressure for solid 
+
         #J = 1.0
         #for d in ti.static(range(DIMENSIONS)):
         #    new_sig = sig[d, d]
@@ -209,7 +217,7 @@ def substep():
             
        # elif material[p] == 2:
             # Reconstruct elastic deformation gradient after plasticity
-       #     F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
+        #    F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
         
         #stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + ti.Matrix.identity(float, DIMENSIONS) * la * J * (
         #    J - 1
@@ -219,10 +227,10 @@ def substep():
         # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         #stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         #affine = stress + p_mass * C[p]
-        #affine = pressure + p_mass * C[p] #Using pressure instead
-        affine = pressure * F[p].inverse().transpose() + p_mass * C[p]
-        #print(stress)
-
+    # Apply pressure to the affine transformation
+        pressure_term = -pressure * F[p].inverse().transpose()
+        affine = pressure_term + p_mass * C[p]
+    
         for i, j in ti.static(ti.ndrange(3, 3)):
             # Loop over 3x3 grid node neighborhood
             offset = ti.Vector([i, j])
@@ -645,6 +653,7 @@ for frame in range(sequence_length):
         color=boundary_color,
         radius=2
     )
+    print(f"Time: {time}, Number of particles: {n_particles}, Board position: {board_states[None]}")
 
 
     # print(f'Frame {i} is recorded in {frame_filename}')
@@ -664,12 +673,5 @@ for frame in range(sequence_length):
     
     if output_gui == False:
         continue
-
 #Prep for GNS input
 save_simulation()
-
-
-
-
-
-
