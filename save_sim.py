@@ -13,6 +13,9 @@ Description: Saves Taichi simulation and meta data
 NOTE: Requires python version 3.9.13 and numpy version <= 1.23.5
 """
 
+material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
+material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, "Piston": 4, "Boundary": 5}
+
 """"""
 def save_sim_data(data_designation, x_data, v_data, materials, bounds, sequence_length, DIMENSIONS, time_delta, dx, dt):
     """Save train.npz, test.npz,or valid.npz to file
@@ -57,9 +60,7 @@ def save_sim_data(data_designation, x_data, v_data, materials, bounds, sequence_
         os.makedirs(ROLLOUT_PATH)
     if not os.path.exists(MODEL_PATH):
         os.makedirs(MODEL_PATH)
-    
-    material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
-    material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, "Piston": 4, "Boundary": 5}
+
 
     material_numpy = materials.to_numpy()
     mat_data_tmp = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
