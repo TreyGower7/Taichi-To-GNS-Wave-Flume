@@ -9,6 +9,8 @@ Script: save_sim.py
 Author: Trey Gower
 Date: 2024-07-01
 Description: Saves Taichi simulation and meta data
+
+NOTE: Requires python version 3.9.13 and numpy version <= 1.23.5
 """
 
 """"""
