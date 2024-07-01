@@ -3,6 +3,7 @@ import numpy as np
 import platform
 import json
 import math
+import h5py
 
 """
 Script: save_sim.py
@@ -79,9 +80,9 @@ def save_sim_data(data_designation, x_data, v_data, materials, bounds, sequence_
     #check version of numpy >= 1.22.0
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
     # Should add a check for the python version as well
-
-    if (np.version.version >= '1.22.0'):
-        print("Using numpy version (>= 1.22.0), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
+    
+    if (np.version.version >= '1.23.5'):
+        print("Using numpy version (>= 1.23.5), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
         pos_data = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
         mat_data = np.asarray(downsampled_mat_data, dtype=object)
     else:
@@ -111,11 +112,16 @@ def save_sim_data(data_designation, x_data, v_data, materials, bounds, sequence_
 
     elif data_designation.lower() in ("v", "valid"):
         output_file_path = os.path.join(file_path, "valid.npz")
-        np.savez_compressed(f'{file_path}/valid.npz', **simulation_data)
+        np.savez_compressed(f'{file_path}/valid.npz', **simulation_data) # Proper 
         
     else:
         output_file_path = os.path.join(cwd_path, "unspecified_sim_data.npz")
-        np.savez_compressed("unspecified_sim_data.npz", **simulation_data)
+        np.savez_compressed("unspecified_sim_data2.npz", **simulation_data)
+
+        # Save to HDF5
+        #with h5py.File(f'{cwd_path}/unspecified_sim_data.h5', 'w') as f:
+        #    f.create_dataset('pos_data', data=downsampled_data)
+        #    f.create_dataset('material_ids', data=downsampled_mat_data)
         
     print("Simulation Data Saved to: ", file_path)
 

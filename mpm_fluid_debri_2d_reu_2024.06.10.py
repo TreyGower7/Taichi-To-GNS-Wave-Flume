@@ -20,7 +20,7 @@ print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if outp
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
-particle_quality_bits = 13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
+particle_quality_bits = 8#13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
 grid_quality_bits = 7 # Bits for grid nodes base unit in a direction, e.g. 7 = 2^7 = 128 grid nodes in a direction
 quality = 6 # Resolution multiplier that affects both particles and grid nodes by multiplying their base units w.r.t. dimensions
 
@@ -48,7 +48,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 1000000
+n_particles = 1000#1000000
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
 
@@ -542,19 +542,24 @@ def save_metadata(file_path):
         print("Metadata Saved!\n")
 
     
-def save_simulation():
+def save_sim_data():
     """Save train.npz, test.npz,or valid.npz to file
     Args:
-        data_designation: a letter to designate rollout(r), training(t), or validation(v) data
-        data: the data from a taichi material point method saved in numpy array of shape (ntimestep, nnodes, ndims)
-        materials: a taichi field defined material = ti.field(dtype=int, shape=n_particles) storing material id data
+        None
     Returns:
         None
     """
-    global data_designation
-    global data_to_save
+    #NOTE:Defining these as global variables in the context of taichi simulations may be necessary
+    #global data_designation
+    #global data
 
     # Define file_path to save to data, models, rollout folder. Located in directory of this file script
+    material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, 
+                        "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
+
+    material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, 
+                        "Piston": 4, "Boundary": 5} # Taichi/our Material Mapping
+    
     system = platform.system().lower()
 
     if system == 'linux':
@@ -583,18 +588,15 @@ def save_simulation():
         os.makedirs(ROLLOUT_PATH)
     if not os.path.exists(MODEL_PATH):
         os.makedirs(MODEL_PATH)
-    
-    material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
-    material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, "Piston": 4, "Boundary": 5}
+
 
     material_numpy = material.to_numpy()
     mat_data_tmp = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
-    #mat_data = np.where(material_numpy == 0, material_id_dict['Water'], material_numpy)
 
     mat_data = np.asarray(mat_data_tmp, dtype=object)
     pos_data = np.stack(data_to_save, axis=0)
 
-    # Perform downsampling for GNS    
+    # Perform downsampling for GNS
     downsampled_mat_data = mat_data[::100]
     downsampled_data = pos_data[:,::100,:]
 
@@ -602,9 +604,9 @@ def save_simulation():
     #check version of numpy >= 1.22.0
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
     # Should add a check for the python version as well
-
-    if (np.version.version >= '1.22.0'):
-        print("Using numpy version (>= 1.22.0), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
+    
+    if (np.version.version >= '1.23.5'):
+        print("Using numpy version (>= 1.23.5), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
         pos_data = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
         mat_data = np.asarray(downsampled_mat_data, dtype=object)
     else:
@@ -630,15 +632,20 @@ def save_simulation():
     elif data_designation.lower() in ("t", "train"):
         output_file_path = os.path.join(file_path, "train.npz")
         np.savez_compressed(f'{file_path}/train.npz', **simulation_data)
-        save_metadata(file_path)
+        save_metadata(file_path, v_data, bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
 
     elif data_designation.lower() in ("v", "valid"):
         output_file_path = os.path.join(file_path, "valid.npz")
-        np.savez_compressed(f'{file_path}/valid.npz', **simulation_data)
+        np.savez_compressed(f'{file_path}/valid.npz', **simulation_data) # Proper 
         
     else:
         output_file_path = os.path.join(cwd_path, "unspecified_sim_data.npz")
-        np.savez_compressed("unspecified_sim_data.npz", **simulation_data)
+        np.savez_compressed("unspecified_sim_data2.npz", **simulation_data)
+
+        # Save to HDF5
+        #with h5py.File(f'{cwd_path}/unspecified_sim_data.h5', 'w') as f:
+        #    f.create_dataset('pos_data', data=downsampled_data)
+        #    f.create_dataset('material_ids', data=downsampled_mat_data)
         
     print("Simulation Data Saved to: ", file_path)
     
@@ -747,8 +754,8 @@ for frame in range(sequence_length):
     if output_gui == False:
         continue
 #Prep for GNS input
-save_simulation()
+#save_simulation()
 
 #if using save_sim.py script
-#ss.save_sim_data(data_designation, data_to_save, v_data_to_save, material, 
-#                 bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
+ss.save_sim_data(data_designation, data_to_save, v_data_to_save, material, 
+                 bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
