@@ -13,8 +13,11 @@ Description: Saves Taichi simulation and meta data
 NOTE: Requires python version 3.9.13 and numpy version <= 1.23.5
 """
 
-material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
-material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, "Piston": 4, "Boundary": 5}
+material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, 
+                        "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
+
+material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, 
+                        "Piston": 4, "Boundary": 5} # Taichi/our Material Mapping
 
 """"""
 def save_sim_data(data_designation, x_data, v_data, materials, bounds, sequence_length, DIMENSIONS, time_delta, dx, dt):
