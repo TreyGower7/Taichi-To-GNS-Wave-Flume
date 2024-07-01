@@ -1,107 +1,91 @@
 import taichi as ti
 import numpy as np
-import math
 
 ti.init(arch=ti.gpu)
 
-# Simulation parameters
-dim = 2
-n_particles = 16384
-n_grid_x = 512
-n_grid_y = 128
-dx = 1.0 / n_grid_y
-inv_dx = 1.0 / dx
-dt = 1e-4
-p_mass = 1.0
-p_vol = 1.0
-E = 400
+# Define simulation parameters
+nx, ny, nz = 128, 64, 64  # Grid resolution
+n_particles = 300000  # Number of particles
+dx = 1.0 / nx  # Grid cell size
+dt = 1e-4  # Time step size
 
-# Particle and grid quantities
-x = ti.Vector.field(dim, dtype=float, shape=n_particles)
-v = ti.Vector.field(dim, dtype=float, shape=n_particles)
-C = ti.Matrix.field(dim, dim, dtype=float, shape=n_particles)
-J = ti.field(dtype=float, shape=n_particles)
+# Particle data
+x = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
+v = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
+m = ti.field(dtype=ti.f32, shape=n_particles)
 
-grid_v = ti.Vector.field(dim, dtype=float, shape=(n_grid_x, n_grid_y))
-grid_m = ti.field(dtype=float, shape=(n_grid_x, n_grid_y))
+# Grid data
+grid_v = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny, nz))
+grid_m = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
 
-# Soliton wave parameters
-A = 0.2  # Amplitude
-c = 1.0  # Wave speed
-x0 = -2.0  # Initial position
-
-@ti.func
-def soliton(x, t):
-    return A / (math.cosh(0.5 * math.sqrt(3 * A) * (x - x0 - c * t)) ** 2)
+# Visualization data
+color_buffer = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny))
 
 @ti.kernel
 def initialize():
     for i in range(n_particles):
-        x[i] = [ti.random() * 0.8 * n_grid_x * dx, ti.random() * 0.4 * n_grid_y * dx]
-        v[i] = [0, 0]
-        J[i] = 1
+        x[i] = [ti.random() * 0.4 + 0.2, ti.random() * 0.4 + 0.05, ti.random() * 0.4 + 0.3]
+        v[i] = [0, 0, 0]
+        m[i] = 1.0
 
 @ti.kernel
-def apply_soliton(t: float):
-    for i in range(n_particles):
-        if x[i][0] < 10 * dx:
-            x[i][1] += soliton(x[i][0], t) - soliton(x[i][0], t - dt)
-            v[i][1] = (soliton(x[i][0], t) - soliton(x[i][0], t - dt)) / dt
-
-@ti.kernel
-def substep():
-    for i, j in grid_m:
-        grid_v[i, j] = [0, 0]
-        grid_m[i, j] = 0
+def p2g():
     for p in x:
         Xp = x[p] / dx
         base = int(Xp - 0.5)
         fx = Xp - base
-        w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-        stress = -dt * p_vol * (J[p] - 1) * 4 * E * inv_dx * inv_dx
-        affine = ti.Matrix([[stress, 0], [0, stress]]) + p_mass * C[p]
-        for i, j in ti.static(ti.ndrange(3, 3)):
-            offset = ti.Vector([i, j])
-            dpos = (offset - fx) * dx
-            weight = w[i].x * w[j].y
-            grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-            grid_m[base + offset] += weight * p_mass
-    for i, j in grid_m:
-        if grid_m[i, j] > 0:
-            grid_v[i, j] /= grid_m[i, j]
-        grid_v[i, j].y -= dt * 9.8  # gravity
-        if j < 3 and grid_v[i, j].y < 0:
-            grid_v[i, j].y = 0  # Bottom boundary condition
-        if j > n_grid_y - 3 and grid_v[i, j].y > 0:
-            grid_v[i, j].y = 0  # Top boundary condition
+        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
+        for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
+            offset = ti.Vector([i, j, k])
+            weight = w[i].x * w[j].y * w[k].z
+            grid_v[base + offset] += weight * m[p] * v[p]
+            grid_m[base + offset] += weight * m[p]
+
+@ti.kernel
+def grid_op():
+    for i, j, k in grid_m:
+        if grid_m[i, j, k] > 0:
+            grid_v[i, j, k] /= grid_m[i, j, k]
+        grid_v[i, j, k].y -= 9.8 * dt  # Gravity
+        
+        # Simple boundary conditions
+        if i < 2 or i > nx - 2 or j < 2 or k < 2 or k > nz - 2:
+            grid_v[i, j, k] = [0, 0, 0]
+
+@ti.kernel
+def g2p():
     for p in x:
         Xp = x[p] / dx
         base = int(Xp - 0.5)
         fx = Xp - base
-        w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-        new_v = ti.Vector.zero(float, 2)
-        new_C = ti.Matrix.zero(float, 2, 2)
-        for i, j in ti.static(ti.ndrange(3, 3)):
-            offset = ti.Vector([i, j])
-            dpos = (offset - fx) * dx
-            weight = w[i].x * w[j].y
-            g_v = grid_v[base + offset]
-            new_v += weight * g_v
-            new_C += 4 * weight * g_v.outer_product(dpos) * inv_dx * inv_dx
+        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
+        new_v = ti.Vector.zero(ti.f32, 3)
+        for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
+            offset = ti.Vector([i, j, k])
+            weight = w[i].x * w[j].y * w[k].z
+            new_v += weight * grid_v[base + offset]
         v[p] = new_v
         x[p] += dt * v[p]
-        J[p] *= 1 + dt * new_C.trace()
-        C[p] = new_C
 
+@ti.kernel
+def visualize():
+    for i, j in color_buffer:
+        mass = 0.0
+        for k in range(nz):
+            mass += grid_m[i, j, k]
+        color_buffer[i, j] = ti.Vector([mass, mass, mass]) * 0.1
+
+# GUI
+gui = ti.GUI("3D MPM Wave Flume", res=(nx, ny))
+
+# Main simulation loop
 initialize()
-gui = ti.GUI("MPM Wave Flume", (1024, 256))
-
-for frame in range(10000):
-    for s in range(50):
-        apply_soliton(frame * 50 * dt + s * dt)
-        substep()
+for frame in range(500):
+    p2g()
+    grid_op()
+    g2p()
     
-    gui.clear(0x112F41)
-    particles_numpy = x.to_numpy()
-    gui.circles(particles_numpy / [n_grid_x * dx, n_grid_y * dx], radius=1.5, color=0x068587)
-    gui.show()
+    if frame % 5 == 0:  # Visualize every 5 frames
+        visualize()
+        gui.set_image(color_buffer)
+        gui.show()
