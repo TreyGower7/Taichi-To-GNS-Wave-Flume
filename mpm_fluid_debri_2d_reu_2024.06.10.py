@@ -10,7 +10,7 @@ import json
 import math
 from taichi import tools
 import imageio
-
+import save_sim as ss
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
 output_png = False# Output frame to PNG files (for later conversion to video), good for remote HPC
@@ -489,8 +489,17 @@ def reset():
 def save_metadata(file_path):
     """Save metadata.json to file
     Args:
-        None
-    Returns:
+        file_path: the path to save the metadata (**Automatically retrieved by system**)
+        bounds: The boundaries for plotting the animated simulation
+        sequence_length: The number of time steps taken
+        DIMENSIONS: The dimensionality of the simulation (i.e. 2d or 3d)
+        time_delta: Defined as 1 / frames per second of the simulation (typically 20-30 fps)
+        dx: Change in grid sizing defined as the grid_length / # of Grids
+        dt: Time rate of change using CFL for simulation stability (dt = CFL * dx / max_vel)
+
+    ** NOTE: GNS currently does not have use for variables "critical_time_step": dt or "dx": dx. **
+       
+       Returns:
         None
     """
     #Using a list for each time step for formatting
@@ -536,7 +545,9 @@ def save_metadata(file_path):
 def save_simulation():
     """Save train.npz, test.npz,or valid.npz to file
     Args:
-        None
+        data_designation: a letter to designate rollout(r), training(t), or validation(v) data
+        data: the data from a taichi material point method saved in numpy array of shape (ntimestep, nnodes, ndims)
+        materials: a taichi field defined material = ti.field(dtype=int, shape=n_particles) storing material id data
     Returns:
         None
     """
@@ -737,3 +748,7 @@ for frame in range(sequence_length):
         continue
 #Prep for GNS input
 save_simulation()
+
+#if using save_sim.py script
+#ss.save_sim_data(data_designation, data_to_save, v_data_to_save, material, 
+#                 bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
