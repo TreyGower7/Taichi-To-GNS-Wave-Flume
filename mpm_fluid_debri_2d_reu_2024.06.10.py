@@ -542,7 +542,7 @@ def save_metadata(file_path):
         print("Metadata Saved!\n")
 
     
-def save_sim_data():
+def save_simulation():
     """Save train.npz, test.npz,or valid.npz to file
     Args:
         None
