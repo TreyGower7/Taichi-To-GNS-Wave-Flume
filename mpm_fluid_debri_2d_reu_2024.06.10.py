@@ -48,7 +48,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 1000#1000000
+n_particles = 1000000
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
 
@@ -632,7 +632,7 @@ def save_simulation():
     elif data_designation.lower() in ("t", "train"):
         output_file_path = os.path.join(file_path, "train.npz")
         np.savez_compressed(f'{file_path}/train.npz', **simulation_data)
-        save_metadata(file_path, v_data, bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
+        save_metadata(file_path)
 
     elif data_designation.lower() in ("v", "valid"):
         output_file_path = os.path.join(file_path, "valid.npz")
