@@ -11,6 +11,7 @@ import math
 from taichi import tools
 import imageio
 import save_sim as ss
+
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
 output_png = False# Output frame to PNG files (for later conversion to video), good for remote HPC
@@ -48,7 +49,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 1000000
+n_particles = 100000
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
 
@@ -73,11 +74,9 @@ gamma_water = 7.15 #Ratio of specific heats for water
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 fps = 20
 time_delta = 1.0 / fps
-pressure = 0.0
-min_pressure = -1.0e6  # min pressure to prevent excessive negative pressure values
-stress_list = []
 
 
+# Piston Physics
 piston_amplitude = float(3.6) # 4 meters max range on piston's stroke in the OSU LWF
 piston_period = float(180.0)
 piston_pos = np.asarray(np.array([0.0, 0.0, 0.0])  \
@@ -123,13 +122,26 @@ vel_std = []
 acc_mean = []
 acc_std = []
 
+# Material Ids
+material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, 
+                    "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
+
+material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, "Steel": 4, 
+                    "Piston": 5, "Boundary": 6} # Taichi/our Material Mapping
+    
+
 x = ti.Vector.field(DIMENSIONS, dtype=float, shape=n_particles)  # position
 v = ti.Vector.field(DIMENSIONS, dtype=float, shape=n_particles)  # velocity
 C = ti.Matrix.field(DIMENSIONS, DIMENSIONS, dtype=float, shape=n_particles)  # affine velocity field
 F = ti.Matrix.field(DIMENSIONS, DIMENSIONS, dtype=float, shape=n_particles)  # deformation gradient
 material = ti.field(dtype=int, shape=n_particles)  # material id
 Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
-grid_tuple = (n_grid_x, n_grid_y) #if DIMENSIONS == 2 else  (n_grid, n_grid, n_grid)
+
+if DIMENSIONS == 2:
+    grid_tuple = (n_grid_x, n_grid_y)
+else:
+    grid_tuple = (n_grid_x, n_grid_y, n_grid_z)
+
 grid_v = ti.Vector.field(DIMENSIONS, dtype=float, shape=grid_tuple)  # grid node momentum/velocity
 grid_m = ti.field(dtype=float, shape=grid_tuple)  # grid node mass
 gravity = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
@@ -146,18 +158,21 @@ ti.root.place(board_states)
 @ti.func
 def update_material_properties(p):
     # Hardening coefficient: snow gets harder when compressed
+    # Metals between h = .1-.5
     h = 1.0
-    if material[p] == 0: 
+    if material[p] == material_id_dict_mpm["Water"]: # 0
         h = 1.0
-    if material[p] == 1:  # Fixed-Corotated Hyper-elastic material: broad debris / jelly / plastic behavior
+    if material[p] == material_id_dict_mpm["Snow"]: # 1 
+    # Fixed-Corotated Hyper-elastic material: broad debris / jelly / plastic behavior
         h = 1.0 # Do not scale elastic moduli by default
-    if material[p] == 2:
+    if material[p] == material_id_dict_mpm["Debris"]: # 2
         h = 1.0
     else:
         h = ti.max(0.1, ti.min(5, ti.exp(10 * (1.0 - Jp[p])))) # Don't calc this unless used, expensive operation
 
     mu, la = mu_0 * h, lambda_0 * h # adjust elastic moduli based on hardening coefficient
-    if material[p] == 0:  # liquid 
+
+    if material[p] == material_id_dict_mpm["Water"]: # 0:  # liquid 
         mu = 0.0 # assumed no shear modulus...
 
     return h, mu, la
@@ -199,13 +214,13 @@ def compute_stress_svd(p, mu, la):
     #J = 1.0
     for d in ti.static(range(DIMENSIONS)):
         new_sig = sig[d, d]
-        if material[p] == 2:  # Snow-like material
+        if material[p] == material_id_dict_mpm["Debris"]: # 2:  # Snow-like material
             new_sig = min(max(sig[d, d], 1 - 2.5e-2), 1 + 4.5e-3)  # Plasticity
         Jp[p] *= sig[d, d] / new_sig # stable?
         sig[d, d] = new_sig
         J *= new_sig
 
-    if material[p] == 2:
+    if material[p] == material_id_dict_mpm["Debris"]: # 2:
         # Reconstruct elastic deformation gradient after plasticity
         F[p] = U @ sig @ V.transpose() # Singular value decomposition, good for large deformations on fixed-corotated model 
     
@@ -236,7 +251,7 @@ def compute_stress(mu, la, F):
     P = mu * (F - FinvT) + K * ti.math.log(J) * FinvT
 
     # Neo-hookean strain energy density function
-    # nh_strain = neo_hookean_model( h, mu, la, F, J) 
+    # nh_strain = neo_hookean_model( h, mu, la, F, J ) 
     
     # Cauchy stress tensor (denoted by sigma)
     stress = (1 / J) * P @ F.transpose()
@@ -245,19 +260,27 @@ def compute_stress(mu, la, F):
 
 @ti.kernel
 def substep():
-    # if DIMENSIONS == 2:
-    for i, j in grid_m:
-        grid_v[i, j] = [0, 0]
-        grid_m[i, j] = 0
-    # elif DIMENSIONS == 3:
-    #     for i, j, k in grid_m:
-    #         grid_v[i, j, k] = [0, 0, 0]
-    #         grid_m[i, j, k] = 0
-    # else:
-        # ti.static_print("Error: Invalid number of DIMENSIONS")
-        
-    # TODO: Detangle/define more material laws into their own functions / objects
-    # Taichi did things improperly here 
+    clear_grid()
+    p2g()
+    update_grid()
+    g2p()
+    handle_piston_collisions()
+
+@ti.func
+def clear_grid():
+    if DIMENSIONS == 2:
+        for i, j in grid_m:
+            grid_v[i, j] = ti.Vector.zero(float, DIMENSIONS)
+            grid_m[i, j] = 0
+    #elif DIMENSIONS == 3:
+    #    for i, j, k in grid_m:
+    #        grid_v[i, j, k] = ti.Vector.zero(float, DIMENSIONS)
+    #        grid_m[i, j, k] = 0
+    #else:
+    #    raise Exception("Improper Dimensionality for Simulation Must Be 2D or 3D ")
+
+@ti.func
+def p2g():
     for p in x:  # Particle state update and scatter to grid (P2G)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
@@ -275,74 +298,101 @@ def substep():
         #N eo-hookean formulation for Cauchy stress from first Piola-Kirchoff stress
         stress = compute_stress(mu, la, F[p])
 
-        # stress = compute_stress_svd(p, mu, la) #Passing in p since F is getting updated
-
         # Reset deformation gradient to avoid numerical instability
-        if material[p] == 0: # water
-            # if DIMENSIONS == 2:
+        if material[p] == material_id_dict_mpm["Water"]: # 0
             F[p] = ti.Matrix.identity(float, DIMENSIONS) * ti.sqrt(J)
-            # elif DIMENSIONS == 3:
-            #     F[p] = ti.Matrix.identity(float, DIMENSIONS) * ti.cbrt(J)
-            # else:
-                # ti.static_print("Error: Invalid number of DIMENSIONS")
             
-        # Dp_inv = 3 * inv_dx * inv_dx # Applies only to BSpline Cubic kernel in APIC/MLS-MPM / maybe PolyPIC
-        # Dp_inv = 4 * inv_dx * inv_dx # Applies only to BSpline Quadratic kernel in APIC/MLS-MPM / maybe PolyPIC
         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         affine = stress + p_mass * C[p]
+        if DIMENSIONS == 2:
+            for i, j in ti.static(ti.ndrange(3, 3)):
+                # Loop over 3x3 grid node neighborhood
+                offset = ti.Vector([i, j])
+                dpos = (offset.cast(float) - fx) * dx
+                weight = w[i][0] * w[j][1]
+                grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
+                grid_m[base + offset] += weight * p_mass
+        #elif DIMENSIONS == 3:
+        #    for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
+        #        offset = ti.Vector([i, j, k])
+        #        dpos = (offset.cast(float) - fx) * dx
+        #        weight = w[i][0] * w[j][1] * w[k][2]
+        #        grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
+        #        grid_m[base + offset] += weight * p_mass
 
-        for i, j in ti.static(ti.ndrange(3, 3)):
-            # Loop over 3x3 grid node neighborhood
-            offset = ti.Vector([i, j])
-            dpos = (offset.cast(float) - fx) * dx
-            weight = w[i][0] * w[j][1]
-            grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-            grid_m[base + offset] += weight * p_mass
+@ti.func
+def update_grid():
+    if DIMENSIONS == 2:
+        for i, j in grid_m:
+            if grid_m[i, j] > 0:  # No need for epsilon here
+                # Momentum to velocity
+                grid_v[i, j] = (1 / grid_m[i, j]) * grid_v[i, j]
+                grid_v[i, j] += dt * gravity[None]   # gravity
+                apply_boundary_conditions(i, j, 0)
+    #else:
+    #    for i, j, k in grid_m:
+    #        if grid_m[i, j, k] > 0: # No need for epsilon here
+                # Momentum to velocity
+    #            grid_v[i, j, k] = (1 / grid_m[i, j, k]) * grid_v[i, j, k]
+    #            grid_v[i, j, k] += dt * gravity[None] # gravity
+    #            apply_boundary_conditions(i, j, k)
 
-    for i, j in grid_m:
-        if grid_m[i, j] > 0:  # No need for epsilon here
-            # Momentum to velocity
-            grid_v[i, j] = (1 / grid_m[i, j]) * grid_v[i, j]
-            grid_v[i, j] += dt * gravity[None]   # gravity
-            # dist = attractor_pos[None] - dx * ti.Vector([i, j])
-            # grid_v[i, j] += dist / (grid_length * 0.01 + dist.norm()) * attractor_strength[None] * dt 
-            if i < 3 and grid_v[i, j][0] < 0:
-                grid_v[i, j][0] = 0  # Boundary conditions
-            if i > n_grid_x - 3 and grid_v[i, j][0] > 0:
-                grid_v[i, j][0] = 0
-            if j < 3 and grid_v[i, j][1] < 0:
-                grid_v[i, j][1] = 0
-            if j > n_grid_y - 3 and grid_v[i, j][1] > 0:
-                grid_v[i, j][1] = 0
+@ti.func
+def apply_boundary_conditions(i, j, k):
+    if DIMENSIONS == 2:
+        if i < 3 and grid_v[i, j][0] < 0:
+            grid_v[i, j][0] = 0  # Boundary conditions
+        if i > n_grid_x - 3 and grid_v[i, j][0] > 0:
+            grid_v[i, j][0] = 0
+        if j < 3 and grid_v[i, j][1] < 0:
+            grid_v[i, j][1] = 0
+        if j > n_grid_y - 3 and grid_v[i, j][1] > 0:
+            grid_v[i, j][1] = 0
+    #else:
+    #    if i < 3 and grid_v[i, j, k][0] < 0: 
+    #        grid_v[i, j, k][0] = 0
+    #    if i > n_grid_x - 3 and grid_v[i, j, k][0] > 0: 
+    #        grid_v[i, j, k][0] = 0
+    #    if j < 3 and grid_v[i, j, k][1] < 0: 
+    #        grid_v[i, j, k][1] = 0
+    #    if j > n_grid_y - 3 and grid_v[i, j, k][1] > 0: 
+    #        grid_v[i, j, k][1] = 0
+    #    if k < 3 and grid_v[i, j, k][2] < 0: 
+    #        grid_v[i, j, k][2] = 0
+    #    if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0: 
+    #        grid_v[i, j, k][2] = 0
 
+
+@ti.func
+def g2p():
     for p in x:  # grid to particle (G2P)
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
         new_v = ti.Vector.zero(float, DIMENSIONS)
         new_C = ti.Matrix.zero(float, DIMENSIONS, DIMENSIONS)
-        for i, j in ti.static(ti.ndrange(3, 3)):
-            # loop over 3x3 grid node neighborhood
-            dpos = ti.Vector([i, j]).cast(float) - fx
-            g_v = grid_v[base + ti.Vector([i, j])]
-            weight = w[i][0] * w[j][1]
-            new_v += weight * g_v
-            new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
+        if DIMENSIONS == 2:
+            for i, j in ti.static(ti.ndrange(3, 3)):
+                # loop over 3x3 grid node neighborhood
+                dpos = ti.Vector([i, j]).cast(float) - fx
+                g_v = grid_v[base + ti.Vector([i, j])]
+                weight = w[i][0] * w[j][1]
+                new_v += weight * g_v
+                new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
+        #else:
+        #    for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
+        #        # loop over 3x3x3 grid node neighborhood
+        #        dpos = ti.Vector([i, j, k]).cast(float) - fx
+        #        g_v = grid_v[base + ti.Vector([i, j, k])]
+        #        weight = w[i][0] * w[j][1] * w[k][2]
+        #        new_v += weight * g_v
+        #        new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
 
-        # if x[p][1] > grid_length_y:  # Upper boundary
-        #     x[p][1] = grid_length_y
-        #     if v[p][1] > 0:
-        #         v[p][1] = 0  # Stop upward velocity
-                
-    # Piston Collisions
+@ti.func
+def handle_piston_collisions():
     for p in x:
-        # if x[p][0] < piston_pos[0]:  # Adjust the threshold as needed
-        #     v[p][0] = ti.max(v[p][0], ti.max(1.0 * ti.max(piston_pos[0] - x[p][0], 0.0) / dt  - v[p][0], 1.0 * ti.max(piston_pos[0] - x[p][0], 0.0) / dt * 1.0) )   # Adjust the force strength as needed
-        #     displacement_into_piston = ti.max(piston_pos_current - x[p][0], 0.0)
-        #     piston_escape_velocity = 
-        #     v[p][0] = ti.max(v[p][0], piston_escape_velocity)  # Stop the particle from moving into the piston
         # Apply piston force based on Hooke's law
         piston_pos_current = board_states[None][0]
         if x[p][0] < piston_pos_current:
@@ -353,8 +403,6 @@ def substep():
             piston_escape_velocity = force / p_mass * dt  # v = F / m * dt
             piston_escape_velocity = ti.min(piston_escape_velocity, max_vel)  # Cap the velocity to prevent instability
             v[p][0] = ti.max(v[p][0], piston_escape_velocity)  # Stop the particle from moving into the piston
-            
-            # v[p][0] += ti.max(force * dt - v[p][0], force * dt * 1.0)  # Apply the force to the velocity
 
 @ti.func
 def erf_approx(x):
@@ -381,23 +429,6 @@ def erf_approx(x):
     y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * ti.exp(-x * x)
 
     return sign * y
-    
-# @ti.kernel
-# def move_board():
-#     b = board_states[None]
-#     b[1] += .2 #adjusting for the coordinate frame
-#     b[1] += dt
-#     period = 180
-#     vel_strength = 0.6 # Make this analytical w.r.t. time - position
-#     if b[1] >= 2 * period:
-#         b[1] = 0
-#     # Update the piston position
-#     piston_motion_scale = 0.01 # Assume a 100 meter flume length for scaling
-#     b[0] += -(ti.sin(b[1] * np.pi / period) * vel_strength) * time_delta * piston_motion_scale
-#     # Ensure the piston stays within the boundaries
-#     b[0] = ti.max(0, ti.min(b[0], 0.12))
-#     #b[0] = ti.max(0.88, ti.min(b[0], 1.0))  # boundaries for the right side if we want piston there
-#     board_states[None] = b
 
 @ti.kernel
 def move_board_solitary():
@@ -405,17 +436,10 @@ def move_board_solitary():
     t = time - wait_time if time - wait_time > 0.0 else 0.0
     b = board_states[None]
     b[1] += dt  # Adjusting for the coordinate frame
-    # b[1] += 0.2
-
-    #vel_strength = 2.0
 
     if b[1] >= 2 * piston_period:
         b[1] = 0
 
-    # piston_motion_scale = 0.01125 # Assume a ~88.89 meter flume length for scaling
-    # piston_amplitude = float(piston_amplitude * 1.0) # Double amplitude for more interesting visuals, remove later
-    # Update the piston position using the error function approximation function
-    # b[0] += (piston_pos[0]) + piston_amplitude * ((erf_approx(t - 2.5 - 1e-2) + 1.0) / 2.0) #Soliton wave
     b[0] += piston_amplitude * ((erf_approx(t - 2.5 - 1e-2) + 1.0) / 2.0) #Soliton wave
     
     # Ensure the piston stays within the boundaries
@@ -445,25 +469,8 @@ def reset():
             material[i] = 0  # fluid
         else:
             # Choose shape
-            shape = 2
+            shape = 0
             if shape == 0:
-                # Initialize debris particles from circles for jelly material
-                angle = 2 * np.pi * ti.random()
-                radius = 0.005 * ti.random()
-                x[i] = [
-                    ti.random() * 0.1 + 0.1 * (i // group_size) + radius * ti.cos(angle),  # Circle particles in smaller x-range
-                    ti.random() * .9 + 0.1 * (i // group_size) + radius * ti.sin(angle)  # Circle particles in smaller y-range
-
-                ]
-            elif shape == 1:
-                # Initialize circles for jelly material
-                angle = 2 * np.pi * ti.random()
-                radius = 0.05 * ti.random()
-                x[i] = [
-                    ti.random() * 0.05 + 0.2 * (i // group_size) + radius * ti.cos(angle),  # Circle particles in smaller x-range
-                    ti.random() * 0.05 + 0.05 * (i // group_size) + radius * ti.sin(angle)  # Circle particles in smaller y-range
-                ]
-            elif shape == 2:
                 id = i % (water_ratio_numerator * group_size)
                 row_size = debris_row_size
                 block_size = row_size**2
@@ -475,11 +482,7 @@ def reset():
                     debris_particle_y   # Block particles are confined to a smaller y-range
                 ]
             material[i] = 1  # Fixed-Corotated Hyper-elastic debris (e.g. for simple plastic, metal, rubber)
-        #x[i] = [
-        #    ti.random() * 0.2 + 0.1 + 0.4 * (i // group_size),
-        #    ti.random() * 0.2 + 0.02 + 0.02 * (i // group_size),
-        #]
-        #material[i] = min(i // group_size, 1)  # 0: fluid 1: jelly 2: snow
+  
         v[i] = [0.0, 0.0]
         F[i] = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
         Jp[i] = 1.0
@@ -554,12 +557,7 @@ def save_simulation():
     #global data
 
     # Define file_path to save to data, models, rollout folder. Located in directory of this file script
-    material_id_dict_gns = { "Water": 5, "Sand": 6, "Debris": 0, 
-                        "Piston": 0, "Boundary": 3} # GNS Mapping Dict from Dr. Kumar
 
-    material_id_dict_mpm = { "Water": 0, "Snow": 1, "Debris": 2, "Sand": 3, 
-                        "Piston": 4, "Boundary": 5} # Taichi/our Material Mapping
-    
     system = platform.system().lower()
 
     if system == 'linux':
@@ -695,10 +693,7 @@ for frame in range(sequence_length):
         substep()
         move_board_solitary()
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
-    # After the substep:
-    print("Stress values:")
-    for stress in stress_list:
-        print(stress)
+
     # time += time_delta / 100
     # time = frame * time_delta
     print(f't = {round(time,3)}')
@@ -718,6 +713,7 @@ for frame in range(sequence_length):
         palette=palette,
         palette_indices=clipped_material,
     )
+
     # Render the moving piston
     piston_pos_current = board_states[None][0]
     piston_draw = np.array([board_states[None][0] / grid_length, board_states[None][1] / grid_length])
