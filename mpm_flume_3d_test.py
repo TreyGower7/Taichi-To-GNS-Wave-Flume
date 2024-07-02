@@ -18,23 +18,26 @@ m = ti.field(dtype=ti.f32, shape=n_particles)
 grid_v = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny, nz))
 grid_m = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
 
-# Visualization data
-color_buffer = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny))
-
 @ti.kernel
 def initialize():
     for i in range(n_particles):
-        x[i] = [ti.random() * 0.4 + 0.2, ti.random() * 0.4 + 0.05, ti.random() * 0.4 + 0.3]
-        v[i] = [0, 0, 0]
+        x[i] = ti.Vector([ti.random() * 0.4 + 0.2, ti.random() * 0.4 + 0.05, ti.random() * 0.4 + 0.3])
+        v[i] = ti.Vector([0.0, 0.0, 0.0])
         m[i] = 1.0
+
+@ti.kernel
+def reset_grid():
+    for i, j, k in grid_m:
+        grid_v[i, j, k] = ti.Vector([0.0, 0.0, 0.0])
+        grid_m[i, j, k] = 0.0
 
 @ti.kernel
 def p2g():
     for p in x:
         Xp = x[p] / dx
         base = int(Xp - 0.5)
-        fx = Xp - base
-        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
+        fx = Xp - base.cast(float)
+        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1.0)**2, 0.5 * (fx - 0.5)**2]
         for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
             offset = ti.Vector([i, j, k])
             weight = w[i].x * w[j].y * w[k].z
@@ -49,17 +52,17 @@ def grid_op():
         grid_v[i, j, k].y -= 9.8 * dt  # Gravity
         
         # Simple boundary conditions
-        if i < 2 or i > nx - 2 or j < 2 or k < 2 or k > nz - 2:
-            grid_v[i, j, k] = [0, 0, 0]
+        if i < 2 or i > nx - 3 or j < 2 or k < 2 or k > nz - 3:
+            grid_v[i, j, k] = ti.Vector([0.0, 0.0, 0.0])
 
 @ti.kernel
 def g2p():
     for p in x:
         Xp = x[p] / dx
         base = int(Xp - 0.5)
-        fx = Xp - base
-        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
-        new_v = ti.Vector.zero(ti.f32, 3)
+        fx = Xp - base.cast(float)
+        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1.0)**2, 0.5 * (fx - 0.5)**2]
+        new_v = ti.Vector([0.0, 0.0, 0.0])
         for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
             offset = ti.Vector([i, j, k])
             weight = w[i].x * w[j].y * w[k].z
@@ -67,25 +70,36 @@ def g2p():
         v[p] = new_v
         x[p] += dt * v[p]
 
-@ti.kernel
-def visualize():
-    for i, j in color_buffer:
-        mass = 0.0
-        for k in range(nz):
-            mass += grid_m[i, j, k]
-        color_buffer[i, j] = ti.Vector([mass, mass, mass]) * 0.1
+# Initialize particles
+initialize()
 
-# GUI
-gui = ti.GUI("3D MPM Wave Flume", res=(nx, ny))
+# Create window
+window = ti.ui.Window("3D MPM Wave Flume", (1024, 768), vsync=True)
+canvas = window.get_canvas()
+scene = ti.ui.Scene()
+camera = ti.ui.Camera()
+
+# Set initial camera position
+camera.position(1.5, 1.5, 1.5)
+camera.lookat(0.5, 0.3, 0.5)
 
 # Main simulation loop
-initialize()
-for frame in range(500):
+while window.running:
+    reset_grid()
     p2g()
     grid_op()
     g2p()
     
-    if frame % 5 == 0:  # Visualize every 5 frames
-        visualize()
-        gui.set_image(color_buffer)
-        gui.show()
+    # Set the camera
+    camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
+    scene.set_camera(camera)
+
+    # Set the light
+    scene.point_light(pos=(0.5, 1.5, 0.5), color=(1, 1, 1))
+
+    # Draw the particles
+    scene.particles(x, radius=0.005, color=(0, 0.5, 0.5))
+
+    # Render the scene
+    canvas.scene(scene)
+    window.show()
