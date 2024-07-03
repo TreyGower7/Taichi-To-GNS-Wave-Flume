@@ -19,8 +19,6 @@ ti.init(arch=ti.gpu)  # Try to run on GPU
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
 output_png = True# Output frame to PNG files (for later conversion to video), good for remote HPC
-downsampling = True
-downsampling_ratio = 100 # Downsamples by 100x
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
@@ -52,7 +50,9 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 100000
+n_particles = 10000000
+downsampling = True
+downsampling_ratio = 100 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
 
@@ -740,7 +740,7 @@ for frame in range(sequence_length):
         color=boundary_color,
         radius=2
     )
-    print(f"Time: {time}, Number of particles: {n_particles}, Board position: {board_states[None]}")
+    #print(f"Time: {time}, Number of particles: {n_particles}, Board position: {board_states[None]}")
 
 
     frame_filename = f'frame_{frame:05d}.png'
