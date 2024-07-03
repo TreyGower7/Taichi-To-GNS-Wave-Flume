@@ -17,7 +17,7 @@ ti.init(arch=ti.gpu)  # Try to run on GPU
 
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
-output_png = False# Output frame to PNG files (for later conversion to video), good for remote HPC
+output_png = True# Output frame to PNG files (for later conversion to video), good for remote HPC
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
@@ -550,9 +550,8 @@ def save_simulation():
     Returns:
         None
     """
-    #NOTE:Defining these as global variables in the context of taichi simulations may be necessary
-    #global data_designation
-    #global data
+    global data_designation
+    global data
 
     # Define file_path to save to data, models, rollout folder. Located in directory of this file script
 
@@ -646,18 +645,18 @@ def save_simulation():
     print("Simulation Data Saved to: ", file_path)
     
 # Define a Taichi field to store the result
-def downsample(X_data):
+#def downsample(X_data):
 
     # Reshape the array
-    Y = X_data.reshape(2, sequence_length, 2, 750, 2, 2)
+#    Y = X_data.reshape(2, sequence_length, 2, 750, 2, 2)
 
     # Sum over the specified axes
-    Z = np.sum(Y, axis=(0, 2, 4)) / 8
+#    Z = np.sum(Y, axis=(0, 2, 4)) / 8
 
     # Squeeze the resulting array to ensure removal of singleton dimensions
-    Z = np.squeeze(Z)
+#    Z = np.squeeze(Z)
 
-    return Z
+#    return Z
 
 #Simulation Prerequisites 
 
@@ -665,7 +664,11 @@ data_designation = str(input('What is the output particle data for? Select: Roll
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
-gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
+
+if DIMENSIONS == 2:
+    gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
+elif DIMENSIONS == 3:
+    gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
 
 palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
 
@@ -677,6 +680,11 @@ gui_res = min(1080, n_grid) # Set the resolution of the GUI
 gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in the Material Point Method", res=gui_res, background_color=gui_background_color_white)
 reset()
 
+# Saving Figures of the simulation
+base_frame_dir = './Flume/figures/'
+os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
+
+
 for frame in range(sequence_length):  
     if gui.get_event(ti.GUI.PRESS):
             if gui.event.key == "r":
@@ -687,22 +695,18 @@ for frame in range(sequence_length):
                 break
 
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
-    for s in range(int((1.0/fps) // dt)): # Will need to double-check the use of 2e-3, dt, etc
+    for s in range(int((1.0/fps) // dt)): 
         substep()
         move_board_solitary()
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
 
-    # time += time_delta / 100
-    # time = frame * time_delta
+
     print(f't = {round(time,3)}')
 
     
     #Change to tiachi fields probably
     data_to_save.append(x.to_numpy())
     v_data_to_save.append(v.to_numpy())
-
-    # time += time_delta
-    print(f't = {round(time,3)}')
     
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     gui.circles(
@@ -730,23 +734,28 @@ for frame in range(sequence_length):
     print(f"Time: {time}, Number of particles: {n_particles}, Board position: {board_states[None]}")
 
 
-    # print(f'Frame {i} is recorded in {frame_filename}')
-    # gui.show(filename)  # export and show in GUI
+    frame_filename = f'frame_{frame:05d}.png'
+    frame_path = os.path.join(base_frame_dir, frame_filename)
 
-    frame_filename = f'dataset/figures/frame_{frame:05d}.png'   # create filename with suffix png
     if output_png and output_gui:
-        # gui.show("./dataset/figures/" + frame_filename)
-        gui.show(frame_filename)
-
-    elif output_png and output_gui == False:
-        tools.imwrite(x.to_numpy(), f'./dataset/figures/{frame_filename}')
-    elif output_gui and output_png == False:
+        try:
+            gui.show(frame_path)
+        except Exception as e:
+            print(f"Error showing frame: {e}")
+            # Fallback to imwrite
+            try:
+                tools.imwrite(x.to_numpy(), frame_path)
+            except Exception as e:
+                print(f"Error writing frame: {e}")
+    elif output_png and not output_gui:
+        tools.imwrite(x.to_numpy(), frame_path)
+    elif output_gui and not output_png:
         gui.show()
     else:
         print("WARNING - No output method selected, frame not saved or displayed...")
-    
-    if output_gui == False:
+    if not output_gui:
         continue
+    
 #Prep for GNS input
 #save_simulation()
 
