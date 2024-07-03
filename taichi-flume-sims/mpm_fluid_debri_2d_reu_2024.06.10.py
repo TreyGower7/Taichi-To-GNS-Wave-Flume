@@ -3,26 +3,29 @@
 
 # Added above lines for external execution of the script
 import taichi as ti
+from taichi import tools
 import numpy as np
 import platform # For getting the operating system name, taichi may already have something for this
 import os
 import json
 import math
-from taichi import tools
 import imageio
 import save_sim as ss
 import time as T
 
-
 ti.init(arch=ti.gpu)  # Try to run on GPU
+dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower()
+if dim == '3d' or int(dim) == 3:
+    DIMENSIONS = 3
+else:
+    DIMENSIONS = 2
 
-DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
-output_png = False# Output frame to PNG files (for later conversion to video), good for remote HPC
+output_png = False# Outputs png files and makes a gif out of them
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
-particle_quality_bits = 8#13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
+particle_quality_bits = 13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
 grid_quality_bits = 7 # Bits for grid nodes base unit in a direction, e.g. 7 = 2^7 = 128 grid nodes in a direction
 quality = 6 # Resolution multiplier that affects both particles and grid nodes by multiplying their base units w.r.t. dimensions
 
@@ -92,7 +95,7 @@ piston_pos = np.asarray(np.array([0.0, 0.0, 0.0])  \
             + (dx * np.array([4, 0, 0])), dtype=float) # Initial [X,Y,Z] position of the piston face
 piston_start_x = 4 * dx / grid_length
 piston_travel_x = piston_amplitude / grid_length
-piston_wait_time = 1.0 # don't immediately start the piston, let things settle with gravity first
+piston_wait_time = 0.5 # don't immediately start the piston, let things settle with gravity first
 
 # Calc timestep based on elastic moduli of materials
 CFL = 0.5 # CFL stability number. Typically 0.3 - 0.5 is good
@@ -466,35 +469,62 @@ def reset():
         water_ratio_numerator = water_ratio_denominator - 1
         n_water_particles = water_ratio_numerator * group_size
         if i < n_water_particles:
+            if ti.static(DIMENSIONS == 2):
             # ppc = 4
-            x[i] = [
-                # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
-                # ti.random() * 0.1 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
-                (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),  # Fluid particles are spread over a wider x-range
-                (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider y-range
-            ]
+                x[i] = [
+                    # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
+                    # ti.random() * 0.1 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
+                    (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),  # Fluid particles are spread over a wider x-range
+                    (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider y-range
+                ]
+            if ti.static(DIMENSIONS == 3):
+                x[i] = [
+                    # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
+                    # ti.random() * 0.1 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
+                    (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),  # Fluid particles are spread over a wider x-range
+                    (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size),  # Fluid particles are spread over a wider y-range
+                    (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider z-range
+                ]
             material[i] = 0  # fluid
         else:
             # Choose shape
             shape = 0
+            id = i % (n_water_particles)
+            row_size = debris_row_size
+            block_size = row_size**2
+            debris_particle_x = ti.min(grid_length_x, (4*dx ) + (grid_length * (piston_start_x + piston_travel_x)) + (dx * particle_spacing_ratio) * ((id % row_size**2) % row_size) + grid_length * (16 * dx / grid_length) * (id // (row_size**2)))
+            debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
             if shape == 0:
-                id = i % (n_water_particles)
-                row_size = debris_row_size
-                block_size = row_size**2
-                debris_particle_x = ti.min(grid_length_x, (4*dx ) + (grid_length * (piston_start_x + piston_travel_x)) + (dx * particle_spacing_ratio) * ((id % row_size**2) % row_size) + grid_length * (16 * dx / grid_length) * (id // (row_size**2)))
-                debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
-
-                x[i] = [
-                    debris_particle_x,  # Block particles are confined to a smaller x-range
-                    debris_particle_y   # Block particles are confined to a smaller y-range
-                ]
+                if ti.static(DIMENSIONS == 2):
+                        x[i] = [
+                            debris_particle_x,  # Block particles are confined to a smaller x-range
+                            debris_particle_y   # Block particles are confined to a smaller y-range
+                        ]
+                elif ti.static(DIMENSIONS == 3):
+                    debris_particle_z = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    x[i] = [
+                        debris_particle_x,  # Block particles are confined to a smaller x-range
+                        debris_particle_y,   # Block particles are confined to a smaller y-range
+                        debris_particle_z
+                    ]
             material[i] = 1  # Fixed-Corotated Hyper-elastic debris (e.g. for simple plastic, metal, rubber)
-  
-        v[i] = [0.0, 0.0]
-        F[i] = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
-        Jp[i] = 1.0
-        C[i] = ti.Matrix.zero(float, DIMENSIONS, DIMENSIONS)
-    board_states[None] = [float(piston_pos[0]), float(piston_pos[1])]  # Initial piston position
+    
+        if ti.static(DIMENSIONS == 2):
+            v[i] = [0.0, 0.0]
+            F[i] = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
+            Jp[i] = 1.0
+            C[i] = ti.Matrix.zero(float, DIMENSIONS, DIMENSIONS)
+        elif ti.static(DIMENSIONS == 3):
+            v[i] = [0.0, 0.0, 0.0]
+            F[i] = ti.Matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+            Jp[i] = 1.0
+            C[i] = ti.Matrix.zero(float, DIMENSIONS, DIMENSIONS)
+            
+    if ti.static(DIMENSIONS == 2):
+        board_states[None] = [float(piston_pos[0]), float(piston_pos[1])]  # Initial piston position
+    elif ti.static(DIMENSIONS == 3):
+        board_states[None] = [float(piston_pos[0]), float(piston_pos[1]), float(piston_pos[2])]  # Initial piston position
+
 
 def save_metadata(file_path):
     """Save metadata.json to file
@@ -684,10 +714,27 @@ palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
 
 gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
 gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes
-
-print("\nPress R to reset.")
 gui_res = min(1080, n_grid) # Set the resolution of the GUI
-gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in the Material Point Method", res=gui_res, background_color=gui_background_color_white)
+
+if DIMENSIONS== 2: 
+    gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in MPM - 2D", 
+                 res=gui_res, background_color=gui_background_color_white)
+
+if DIMENSIONS== 3: 
+    # Initialize the GUI
+    gui = ti.ui.Window("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in MPM - 3D", res = (gui_res, gui_res))
+    canvas = gui.get_canvas()
+    scene = gui.get_scene()
+    camera = ti.ui.Camera()
+
+    # Camera Setup
+    camera.position(0.5, 0.5, 2)
+    camera.lookat(0.00, 0.0, 0.0)
+    scene.set_camera(camera)
+
+    # Set up the light
+    scene.ambient_light((0.5, 0.5, 0.5))
+    scene.point_light(pos=(0.5, 1.5, 1.5), color=(1, 1, 1))
 reset()
 
 # Saving Figures of the simulation
@@ -696,14 +743,6 @@ os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
 frame_paths = []
 
 for frame in range(sequence_length):  
-    if gui.get_event(ti.GUI.PRESS):
-            if gui.event.key == "r":
-                print("Resetting...")
-                reset()
-                data_to_save = []
-            elif gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]:
-                break
-
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
     for s in range(int((1.0/fps) // dt)): 
         substep()
@@ -720,30 +759,41 @@ for frame in range(sequence_length):
     v_data_to_save.append(v.to_numpy())
     
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
-    gui.circles(
-        x.to_numpy() / grid_length,
-        radius=1.5,
-        palette=palette,
-        palette_indices= clipped_material,
-    )
+    if DIMENSIONS == 2:
+        gui.circles(
+            x.to_numpy() / grid_length,
+            radius=1.5,
+            palette=palette,
+            palette_indices= clipped_material,
+        )
 
-    # Render the moving piston
-    piston_pos_current = board_states[None][0]
-    piston_draw = np.array([board_states[None][0] / grid_length, board_states[None][1] / grid_length])
-    
-    #print(piston_pos)
-    gui.line(
-        [piston_draw[0], 0.0], [piston_draw[0], 1.0],
-        color=boundary_color,
-        radius=2
-    )
-    gui.line(
-        [0.0, grid_ratio_y], [grid_ratio_x, grid_ratio_y],
-        color=boundary_color,
-        radius=2
-    )
-    #print(f"Time: {time}, Number of particles: {n_particles}, Board position: {board_states[None]}")
+        # Render the moving piston
+        piston_pos_current = board_states[None][0]
+        piston_draw = np.array([board_states[None][0] / grid_length, board_states[None][1] / grid_length])
+        
+        #print(piston_pos)
+        gui.line(
+            [piston_draw[0], 0.0], [piston_draw[0], 1.0],
+            color=boundary_color,
+            radius=2
+        )
+        gui.line(
+            [0.0, grid_ratio_y], [grid_ratio_x, grid_ratio_y],
+            color=boundary_color,
+            radius=2
+        )
+    elif DIMENSIONS == 3:
+        # DO NOT USE MATPLOTLIB FOR 3D RENDERING
+        # Update the scene with particle positions
+        scene.particles(x, radius=0.01, color=(0.5, 0.5, 1.0))
 
+        # Render the scene
+        canvas.scene(scene)
+
+        # Poll for events
+        for event in gui.get_events(ti.ui.PRESS):
+            if event.key == ti.ui.ESCAPE:
+                exit()
 
     frame_filename = f'frame_{frame:05d}.png'
     frame_path = os.path.join(base_frame_dir, frame_filename)
