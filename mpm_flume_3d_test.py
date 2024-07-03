@@ -50,7 +50,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 10000000
+n_particles = 1000000
 downsampling = True
 downsampling_ratio = 100 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
@@ -692,6 +692,7 @@ reset()
 # Saving Figures of the simulation
 base_frame_dir = './Flume/figures/'
 os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
+frame_paths = []
 
 
 for frame in range(sequence_length):  
@@ -754,16 +755,35 @@ for frame in range(sequence_length):
             # Fallback to imwrite
             try:
                 tools.imwrite(x.to_numpy(), frame_path)
+                frame_paths.append(frame_path)
             except Exception as e:
                 print(f"Error writing frame: {e}")
+        else:
+            frame_paths.append(frame_path)
     elif output_png and not output_gui:
-        tools.imwrite(x.to_numpy(), frame_path)
+        try:
+            tools.imwrite(x.to_numpy(), frame_path)
+            frame_paths.append(frame_path)
+        except Exception as e:
+            print(f"Error writing frame: {e}")
     elif output_gui and not output_png:
         gui.show()
     else:
         print("WARNING - No output method selected, frame not saved or displayed...")
     if not output_gui:
         continue
+
+# Check if there are frames to create a GIF
+if frame_paths:
+    gif_path = f"./Flume/simulation_{n_particles}.gif"
+    try:
+        with imageio.get_writer(gif_path, mode='I', duration=0.1) as writer:
+            for frame_path in frame_paths:
+                image = imageio.imread(frame_path)
+                writer.append_data(image)
+        print(f"GIF created at {gif_path}")
+    except Exception as e:
+        print(f"Error creating GIF: {e}")
     
 #Prep for GNS input
 #save_simulation()
