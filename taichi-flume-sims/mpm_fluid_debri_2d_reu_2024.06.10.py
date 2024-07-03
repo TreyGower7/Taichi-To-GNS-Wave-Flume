@@ -18,7 +18,7 @@ ti.init(arch=ti.gpu)  # Try to run on GPU
 
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
-output_png = True# Output frame to PNG files (for later conversion to video), good for remote HPC
+output_png = False# Output frame to PNG files (for later conversion to video), good for remote HPC
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
@@ -654,21 +654,6 @@ def save_simulation():
         
     print("Simulation Data Saved to: ", file_path)
 
-@ti.kernel
-def get_color(p: ti.i32) -> ti.i32:
-    """assigns color from palette based on material
-    args:
-        p: particle index
-    returns:
-        an integer representing what color to use from the palette
-    """
-    if ti.static(material[p] == material_id_dict_mpm["Water"]):
-        return 0  # index of water color in palette
-    elif ti.static(material[p] == material_id_dict_mpm["Debris"]):
-        return 1  # index of debris color in palette
-    else:
-        return 2  # default color index
-
 # Define a Taichi field to store the result
 #def downsample(X_data):
 
@@ -695,7 +680,7 @@ if DIMENSIONS == 2:
 elif DIMENSIONS == 3:
     gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
 
-palette = [0x068587, 0xED553B, 0xEEEEF0,0x2E4057, 0xF0C987,0x6D214F]
+palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
 
 gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
 gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes
@@ -709,7 +694,6 @@ reset()
 base_frame_dir = './Flume/figures/'
 os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
 frame_paths = []
-
 
 for frame in range(sequence_length):  
     if gui.get_event(ti.GUI.PRESS):
@@ -738,16 +722,10 @@ for frame in range(sequence_length):
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     gui.circles(
         x.to_numpy() / grid_length,
-        radius=1.0,
+        radius=1.5,
         palette=palette,
-        palette_indices=clipped_material,
+        palette_indices= clipped_material,
     )
-    #gui.circles(
-    #x.to_numpy() / grid_length,
-    #radius=1.5,
-    #palette=palette,
-    #palette_indices=get_color(np.arange(n_particles))
-    #)
 
     # Render the moving piston
     piston_pos_current = board_states[None][0]
