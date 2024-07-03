@@ -14,7 +14,7 @@ import save_sim as ss
 import time as T
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
-dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower()
+dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
 if dim == '3d' or int(dim) == 3:
     DIMENSIONS = 3
 else:
@@ -676,7 +676,7 @@ def save_simulation():
     else:
         output_file_path = os.path.join(cwd_path, "unspecified_sim_data.npz")
         np.savez_compressed("unspecified_sim_data2.npz", **simulation_data)
-
+        #np.savez_compressed('simulation_data_kwargs.npz', pos_data=downsampled_data, material_ids=downsampled_mat_data)
         # Save to HDF5
         #with h5py.File(f'{cwd_path}/unspecified_sim_data.h5', 'w') as f:
         #    f.create_dataset('pos_data', data=downsampled_data)
@@ -720,7 +720,7 @@ if DIMENSIONS== 2:
     gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in MPM - 2D", 
                  res=gui_res, background_color=gui_background_color_white)
 
-if DIMENSIONS== 3: 
+elif DIMENSIONS== 3: 
     # Initialize the GUI
     gui = ti.ui.Window("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in MPM - 3D", res = (gui_res, gui_res))
     canvas = gui.get_canvas()
@@ -735,14 +735,15 @@ if DIMENSIONS== 3:
     # Set up the light
     scene.ambient_light((0.5, 0.5, 0.5))
     scene.point_light(pos=(0.5, 1.5, 1.5), color=(1, 1, 1))
-reset()
 
 # Saving Figures of the simulation
 base_frame_dir = './Flume/figures/'
 os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
 frame_paths = []
 
-for frame in range(sequence_length):  
+reset() # Reset sim and initialize particles
+
+for frame in range(sequence_length):
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
     for s in range(int((1.0/fps) // dt)): 
         substep()
@@ -760,9 +761,12 @@ for frame in range(sequence_length):
     
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     if DIMENSIONS == 2:
+        if gui.get_event(ti.GUI.PRESS):
+            if gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]:
+                break
         gui.circles(
             x.to_numpy() / grid_length,
-            radius=1.5,
+            radius=1.0,
             palette=palette,
             palette_indices= clipped_material,
         )
@@ -790,10 +794,10 @@ for frame in range(sequence_length):
         # Render the scene
         canvas.scene(scene)
 
-        # Poll for events
         for event in gui.get_events(ti.ui.PRESS):
             if event.key == ti.ui.ESCAPE:
-                exit()
+                break
+
 
     frame_filename = f'frame_{frame:05d}.png'
     frame_path = os.path.join(base_frame_dir, frame_filename)
@@ -837,8 +841,8 @@ if frame_paths:
         print(f"Error creating GIF: {e}")
     
 #Prep for GNS input
-#save_simulation()
+save_simulation()
 
 #if using save_sim.py script
-ss.save_sim_data(data_designation, data_to_save, v_data_to_save, material, 
-                 bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
+#ss.save_sim_data(data_designation, data_to_save, v_data_to_save, material, 
+ #                bounds, sequence_length, DIMENSIONS, time_delta, dx, dt)
