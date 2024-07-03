@@ -32,7 +32,7 @@ grid_length = 102.4  # Max length of the simulation domain in any direction [met
 # Note: there are buffer grid-cells on either end of each dimension for multi-cell shape-function kernels and BCs
 grid_ratio_x = 1.0 
 grid_ratio_y = 0.125
-grid_ratio_z = 0.0
+grid_ratio_z = 0.125
 grid_length_x = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_x))
 grid_length_y = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_y))
 grid_length_z = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_z))
@@ -50,7 +50,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 1000000
+n_particles = 200000
 downsampling = True
 downsampling_ratio = 100 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
@@ -92,6 +92,7 @@ piston_pos = np.asarray(np.array([0.0, 0.0, 0.0])  \
             + (dx * np.array([4, 0, 0])), dtype=float) # Initial [X,Y,Z] position of the piston face
 piston_start_x = 4 * dx / grid_length
 piston_travel_x = piston_amplitude / grid_length
+piston_wait_time = 1.0 # don't immediately start the piston, let things settle with gravity first
 
 # Calc timestep based on elastic moduli of materials
 CFL = 0.5 # CFL stability number. Typically 0.3 - 0.5 is good
@@ -308,7 +309,7 @@ def p2g():
         if material[p] == material_id_dict_mpm["Water"]: # 0
             F[p] = ti.Matrix.identity(float, DIMENSIONS) * ti.sqrt(J)
             
-        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
+        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress 
         affine = stress + p_mass * C[p]
         if ti.static(DIMENSIONS == 2):
             for i, j in ti.static(ti.ndrange(3, 3)):
@@ -438,8 +439,7 @@ def erf_approx(x):
 
 @ti.kernel
 def move_board_solitary():
-    wait_time = 5.0 # don't immediately start the piston, let things settle with gravity first
-    t = time - wait_time if time - wait_time > 0.0 else 0.0
+    t = time
     b = board_states[None]
     b[1] += dt  # Adjusting for the coordinate frame
 
@@ -464,7 +464,8 @@ def reset():
         row_size = basin_row_size
         # j = i // row_size
         water_ratio_numerator = water_ratio_denominator - 1
-        if i < water_ratio_numerator * group_size:
+        n_water_particles = water_ratio_numerator * group_size
+        if i < n_water_particles:
             # ppc = 4
             x[i] = [
                 # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
@@ -477,11 +478,11 @@ def reset():
             # Choose shape
             shape = 0
             if shape == 0:
-                id = i % (water_ratio_numerator * group_size)
+                id = i % (n_water_particles)
                 row_size = debris_row_size
                 block_size = row_size**2
                 debris_particle_x = ti.min(grid_length_x, (4*dx ) + (grid_length * (piston_start_x + piston_travel_x)) + (dx * particle_spacing_ratio) * ((id % row_size**2) % row_size) + grid_length * (16 * dx / grid_length) * (id // (row_size**2)))
-                debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * water_ratio_numerator * group_size // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
 
                 x[i] = [
                     debris_particle_x,  # Block particles are confined to a smaller x-range
@@ -652,7 +653,22 @@ def save_simulation():
         #    f.create_dataset('material_ids', data=downsampled_mat_data)
         
     print("Simulation Data Saved to: ", file_path)
-    
+
+@ti.kernel
+def get_color(p: ti.i32) -> ti.i32:
+    """assigns color from palette based on material
+    args:
+        p: particle index
+    returns:
+        an integer representing what color to use from the palette
+    """
+    if ti.static(material[p] == material_id_dict_mpm["Water"]):
+        return 0  # index of water color in palette
+    elif ti.static(material[p] == material_id_dict_mpm["Debris"]):
+        return 1  # index of debris color in palette
+    else:
+        return 2  # default color index
+
 # Define a Taichi field to store the result
 #def downsample(X_data):
 
@@ -707,7 +723,8 @@ for frame in range(sequence_length):
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
     for s in range(int((1.0/fps) // dt)): 
         substep()
-        move_board_solitary()
+        if time >= piston_wait_time:  # Wait to activate piston until particles settle
+            move_board_solitary()
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
 
 
@@ -725,6 +742,12 @@ for frame in range(sequence_length):
         palette=palette,
         palette_indices=clipped_material,
     )
+    #gui.circles(
+    #x.to_numpy() / grid_length,
+    #radius=1.5,
+    #palette=palette,
+    #palette_indices=get_color(np.arange(n_particles))
+    #)
 
     # Render the moving piston
     piston_pos_current = board_states[None][0]
