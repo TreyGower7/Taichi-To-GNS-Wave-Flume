@@ -11,6 +11,7 @@ import math
 from taichi import tools
 import imageio
 import save_sim as ss
+import time as T
 
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
@@ -18,6 +19,8 @@ ti.init(arch=ti.gpu)  # Try to run on GPU
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
 output_png = True# Output frame to PNG files (for later conversion to video), good for remote HPC
+downsampling = True
+downsampling_ratio = 100 # Downsamples by 100x
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
@@ -54,6 +57,11 @@ n_particles = 100000
 
 
 print("Number of Particles: ", n_particles)
+T.sleep(1)
+print("Downsampling:{}".format(" enabled" if downsampling else "disabled"))
+T.sleep(1)
+print("Number of Downsampled Particles: ", int(n_particles / downsampling_ratio))
+T.sleep(1)
 print("Number of Grid-Nodes each Direction: ", n_grid_x, n_grid_y, n_grid_z)
 print("dx: ", dx)
 
@@ -592,8 +600,9 @@ def save_simulation():
     pos_data = np.stack(data_to_save, axis=0)
 
     # Perform downsampling for GNS
-    downsampled_mat_data = mat_data[::100]
-    downsampled_data = pos_data[:,::100,:]
+    if downsampling:
+        downsampled_mat_data = mat_data[::downsampling_ratio]
+        downsampled_data = pos_data[:,::downsampling_ratio,:]
 
 
     #check version of numpy >= 1.22.0
