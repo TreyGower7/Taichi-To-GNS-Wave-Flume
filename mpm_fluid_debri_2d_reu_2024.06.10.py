@@ -12,13 +12,13 @@ from taichi import tools
 import imageio
 import save_sim as ss
 
+
+ti.init(arch=ti.gpu)  # Try to run on GPU
+
 DIMENSIONS = 2 # DIMENSIONS, 2D or 3D
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
 output_png = False# Output frame to PNG files (for later conversion to video), good for remote HPC
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
-
-
-ti.init(arch=ti.gpu)  # Try to run on GPU
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
 particle_quality_bits = 8#13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
@@ -139,15 +139,13 @@ Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
 
 if DIMENSIONS == 2:
     grid_tuple = (n_grid_x, n_grid_y)
-else:
+elif DIMENSIONS == 3:
     grid_tuple = (n_grid_x, n_grid_y, n_grid_z)
 
 grid_v = ti.Vector.field(DIMENSIONS, dtype=float, shape=grid_tuple)  # grid node momentum/velocity
 grid_m = ti.field(dtype=float, shape=grid_tuple)  # grid node mass
 gravity = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
-#attractor_strength = ti.field(dtype=float, shape=())
-#attractor_pos = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
-#pressure = ti.field(dtype=ti.f32, shape=n_particles)  # Pressure field
+
 ti.root.place(board_states)
 
 #Future class for different complex materials possibly??
@@ -268,16 +266,16 @@ def substep():
 
 @ti.func
 def clear_grid():
-    if DIMENSIONS == 2:
+    if ti.static(DIMENSIONS == 2):
         for i, j in grid_m:
             grid_v[i, j] = ti.Vector.zero(float, DIMENSIONS)
             grid_m[i, j] = 0
-    #elif DIMENSIONS == 3:
-    #    for i, j, k in grid_m:
-    #        grid_v[i, j, k] = ti.Vector.zero(float, DIMENSIONS)
-    #        grid_m[i, j, k] = 0
-    #else:
-    #    raise Exception("Improper Dimensionality for Simulation Must Be 2D or 3D ")
+    elif ti.static(DIMENSIONS == 3):
+        for i, j, k in grid_m:
+            grid_v[i, j, k] = ti.Vector.zero(float, DIMENSIONS)
+            grid_m[i, j, k] = 0
+    else:
+        raise Exception("Improper Dimensionality for Simulation Must Be 2D or 3D ")
 
 @ti.func
 def p2g():
@@ -304,7 +302,7 @@ def p2g():
             
         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
         affine = stress + p_mass * C[p]
-        if DIMENSIONS == 2:
+        if ti.static(DIMENSIONS == 2):
             for i, j in ti.static(ti.ndrange(3, 3)):
                 # Loop over 3x3 grid node neighborhood
                 offset = ti.Vector([i, j])
@@ -312,34 +310,34 @@ def p2g():
                 weight = w[i][0] * w[j][1]
                 grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
                 grid_m[base + offset] += weight * p_mass
-        #elif DIMENSIONS == 3:
-        #    for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
-        #        offset = ti.Vector([i, j, k])
-        #        dpos = (offset.cast(float) - fx) * dx
-        #        weight = w[i][0] * w[j][1] * w[k][2]
-        #        grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-        #        grid_m[base + offset] += weight * p_mass
+        elif ti.static(DIMENSIONS == 3):
+            for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
+                offset = ti.Vector([i, j, k])
+                dpos = (offset.cast(float) - fx) * dx
+                weight = w[i][0] * w[j][1] * w[k][2]
+                grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
+                grid_m[base + offset] += weight * p_mass
 
 @ti.func
 def update_grid():
-    if DIMENSIONS == 2:
+    if ti.static(DIMENSIONS == 2):
         for i, j in grid_m:
             if grid_m[i, j] > 0:  # No need for epsilon here
                 # Momentum to velocity
                 grid_v[i, j] = (1 / grid_m[i, j]) * grid_v[i, j]
                 grid_v[i, j] += dt * gravity[None]   # gravity
                 apply_boundary_conditions(i, j, 0)
-    #else:
-    #    for i, j, k in grid_m:
-    #        if grid_m[i, j, k] > 0: # No need for epsilon here
+    elif ti.static(DIMENSIONS == 3):
+        for i, j, k in grid_m:
+            if grid_m[i, j, k] > 0: # No need for epsilon here
                 # Momentum to velocity
-    #            grid_v[i, j, k] = (1 / grid_m[i, j, k]) * grid_v[i, j, k]
-    #            grid_v[i, j, k] += dt * gravity[None] # gravity
-    #            apply_boundary_conditions(i, j, k)
+                grid_v[i, j, k] = (1 / grid_m[i, j, k]) * grid_v[i, j, k]
+                grid_v[i, j, k] += dt * gravity[None] # gravity
+                apply_boundary_conditions(i, j, k)
 
 @ti.func
 def apply_boundary_conditions(i, j, k):
-    if DIMENSIONS == 2:
+    if ti.static(DIMENSIONS == 2):
         if i < 3 and grid_v[i, j][0] < 0:
             grid_v[i, j][0] = 0  # Boundary conditions
         if i > n_grid_x - 3 and grid_v[i, j][0] > 0:
@@ -348,19 +346,19 @@ def apply_boundary_conditions(i, j, k):
             grid_v[i, j][1] = 0
         if j > n_grid_y - 3 and grid_v[i, j][1] > 0:
             grid_v[i, j][1] = 0
-    #else:
-    #    if i < 3 and grid_v[i, j, k][0] < 0: 
-    #        grid_v[i, j, k][0] = 0
-    #    if i > n_grid_x - 3 and grid_v[i, j, k][0] > 0: 
-    #        grid_v[i, j, k][0] = 0
-    #    if j < 3 and grid_v[i, j, k][1] < 0: 
-    #        grid_v[i, j, k][1] = 0
-    #    if j > n_grid_y - 3 and grid_v[i, j, k][1] > 0: 
-    #        grid_v[i, j, k][1] = 0
-    #    if k < 3 and grid_v[i, j, k][2] < 0: 
-    #        grid_v[i, j, k][2] = 0
-    #    if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0: 
-    #        grid_v[i, j, k][2] = 0
+    elif ti.static(DIMENSIONS == 3):
+        if i < 3 and grid_v[i, j, k][0] < 0: 
+            grid_v[i, j, k][0] = 0
+        if i > n_grid_x - 3 and grid_v[i, j, k][0] > 0: 
+            grid_v[i, j, k][0] = 0
+        if j < 3 and grid_v[i, j, k][1] < 0: 
+            grid_v[i, j, k][1] = 0
+        if j > n_grid_y - 3 and grid_v[i, j, k][1] > 0: 
+            grid_v[i, j, k][1] = 0
+        if k < 3 and grid_v[i, j, k][2] < 0: 
+            grid_v[i, j, k][2] = 0
+        if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0: 
+            grid_v[i, j, k][2] = 0
 
 
 @ti.func
@@ -371,7 +369,7 @@ def g2p():
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
         new_v = ti.Vector.zero(float, DIMENSIONS)
         new_C = ti.Matrix.zero(float, DIMENSIONS, DIMENSIONS)
-        if DIMENSIONS == 2:
+        if ti.static(DIMENSIONS == 2):
             for i, j in ti.static(ti.ndrange(3, 3)):
                 # loop over 3x3 grid node neighborhood
                 dpos = ti.Vector([i, j]).cast(float) - fx
@@ -379,14 +377,14 @@ def g2p():
                 weight = w[i][0] * w[j][1]
                 new_v += weight * g_v
                 new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
-        #else:
-        #    for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
-        #        # loop over 3x3x3 grid node neighborhood
-        #        dpos = ti.Vector([i, j, k]).cast(float) - fx
-        #        g_v = grid_v[base + ti.Vector([i, j, k])]
-        #        weight = w[i][0] * w[j][1] * w[k][2]
-        #        new_v += weight * g_v
-        #        new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
+        elif ti.static(DIMENSIONS == 3):
+            for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
+                # loop over 3x3x3 grid node neighborhood
+                dpos = ti.Vector([i, j, k]).cast(float) - fx
+                g_v = grid_v[base + ti.Vector([i, j, k])]
+                weight = w[i][0] * w[j][1] * w[k][2]
+                new_v += weight * g_v
+                new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
 
