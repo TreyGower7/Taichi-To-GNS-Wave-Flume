@@ -31,9 +31,6 @@ def save_sim_data(data_designation, x_data, v_data, materials, bounds, sequence_
     Returns:
         None
     """
-    #NOTE:Defining these as global variables in the context of taichi simulations may be necessary
-    #global data_designation
-    #global data
 
     # Define file_path to save to data, models, rollout folder. Located in directory of this file script
     system = platform.system().lower()
