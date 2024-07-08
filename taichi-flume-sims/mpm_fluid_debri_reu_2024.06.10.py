@@ -17,6 +17,25 @@ ti.init(arch=ti.gpu)  # Try to run on GPU
 dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
 if dim == '3d' or int(dim) == 3:
     DIMENSIONS = 3
+    # Wave Flume Render 3d using grid_length as the flume length in 2D & 3D
+    # https://engineering.oregonstate.edu/wave-lab/facilities/large-wave-flume
+    Flume_height_3d = 3.7 # meters
+    Flume_width_3d = 4.6 # meters
+    # Max Water depth addition maybe 
+    # Max_water_depth_tsunami = 2 # meters
+    # Max_water_depth_wind_storm = 2.7 # meters
+    # Define Taichi fields for flume geometry
+    flume_vertices = ti.Vector.field(3, dtype=float, shape=8)
+    bottom = ti.field(dtype=int, shape=6)  # Change to a 1D array
+    # Only way to render flume with differing colors
+    backwall = ti.field(dtype=int, shape=6)
+    frontwall = ti.field(dtype=int, shape=6)
+    sidewalls = ti.field(dtype=int, shape=6)
+
+    front_back_color = (166/255, 126/255, 71/255)  # Rust color in RGB
+    side_color = (197/255, 198/255, 199/255)  # Light grey color in RGB
+    bottom_color = (79/255, 78/255, 78/255)
+    background_color = (237/255, 235/255, 235/255)
 else:
     DIMENSIONS = 2
 
@@ -53,7 +72,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 200000
+n_particles = 20000
 downsampling = True
 downsampling_ratio = 100 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
@@ -372,6 +391,28 @@ def apply_boundary_conditions(i, j, k):
         if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0: 
             grid_v[i, j, k][2] = 0
 
+@ti.func
+def apply_flume_boundary_conditions(p):
+    # Ensure particles stay within the flume dimensions in 3D
+    if x[p][0] < 0:
+        x[p][0] = 0
+        v[p][0] = 0
+    if x[p][0] > grid_length:
+        x[p][0] = grid_length
+        v[p][0] = 0
+    if x[p][1] < 0:
+        x[p][1] = 0
+        v[p][1] = 0
+    if x[p][1] > Flume_height_3d:
+        x[p][1] = Flume_height_3d
+        v[p][1] = 0
+    if x[p][2] < 0:
+        x[p][2] = 0
+        v[p][2] = 0
+    if x[p][2] > Flume_width_3d:
+        x[p][2] = Flume_width_3d
+        v[p][2] = 0
+
 
 @ti.func
 def g2p():
@@ -399,6 +440,7 @@ def g2p():
                 new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
+        apply_flume_boundary_conditions(p)
 
 @ti.func
 def handle_piston_collisions():
@@ -501,7 +543,7 @@ def reset():
                             debris_particle_y   # Block particles are confined to a smaller y-range
                         ]
                 elif ti.static(DIMENSIONS == 3):
-                    debris_particle_z = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    debris_particle_z = ti.min(grid_length_z, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
                     x[i] = [
                         debris_particle_x,  # Block particles are confined to a smaller x-range
                         debris_particle_y,   # Block particles are confined to a smaller y-range
@@ -684,6 +726,7 @@ def save_simulation():
         
     print("Simulation Data Saved to: ", file_path)
 
+
 # Define a Taichi field to store the result
 #def downsample(X_data):
 
@@ -697,46 +740,101 @@ def save_simulation():
 #    Z = np.squeeze(Z)
 
 #    return Z
+    
+@ti.kernel
+def create_flume_vertices():
+    flume_vertices[0] = ti.Vector([0, 0, 0])
+    flume_vertices[1] = ti.Vector([grid_length, 0, 0])
+    flume_vertices[2] = ti.Vector([grid_length, 0, Flume_width_3d])
+    flume_vertices[3] = ti.Vector([0, 0, Flume_width_3d])
+    flume_vertices[4] = ti.Vector([0, Flume_height_3d, 0])
+    flume_vertices[5] = ti.Vector([grid_length, Flume_height_3d, 0])
+    flume_vertices[6] = ti.Vector([grid_length, Flume_height_3d, Flume_width_3d])
+    flume_vertices[7] = ti.Vector([0, Flume_height_3d, Flume_width_3d])
+
+@ti.kernel
+def create_flume_indices():
+    # Bottom face
+    bottom[0], bottom[1], bottom[2] = 0, 1, 2
+    bottom[3], bottom[4], bottom[5] = 0, 2, 3
+
+    # Side faces
+    sidewalls[0], sidewalls[1], sidewalls[2] = 0, 4, 5
+    sidewalls[3], sidewalls[4], sidewalls[5] = 0, 5, 1
+
+    # We want this face transparent to see inside the Flume
+    #sidewalls[6], sidewalls[7], sidewalls[8] = 0, 1, 2
+    #sidewalls[9], sidewalls[10], sidewalls[11] = 0, 2, 3
+    
+    # Front and Back faces
+    backwall[0], backwall[1], backwall[2] = 1, 5, 6
+    backwall[3], backwall[4], backwall[5] = 1, 6, 2
+    frontwall[0], frontwall[1], frontwall[2] = 3, 7, 4
+    frontwall[3], frontwall[4], frontwall[5] = 3, 4, 0
+
+def render_3D():
+    """
+    Renders the 3D wave flume and simulation
+    """
+    # Camera positioned based on flume parameters
+    camera.position(grid_length*1.2, Flume_height_3d*8, Flume_width_3d*6)
+    
+    # Camera looking at the center of the flume
+    camera.lookat(grid_length/2, Flume_height_3d/2, Flume_width_3d/2)
+    
+    # Set the up direction as the y-axis for congruency with particles
+    camera.up(0, 1, 0)
+
+    camera.fov(60)
+
+    # Set the camera for this frame
+    scene.set_camera(camera)
+
+    # Set up the light
+    scene.ambient_light((0.8, 0.8, 0.8))
+    scene.point_light(pos=(grid_length/2, Flume_height_3d*2, Flume_width_3d*2), color=(1, 1, 1))
+
+    # Render the flume
+    # Render the bottom face
+    scene.mesh(flume_vertices, bottom, color=bottom_color)
+    
+    # Render each face separately (if only taichi supported slicing)
+    scene.mesh(flume_vertices, backwall, color=front_back_color)
+    scene.mesh(flume_vertices, sidewalls, color=side_color)
+    scene.mesh(flume_vertices, frontwall, color=front_back_color)
+
+    # Render the scene
+    canvas.scene(scene)
 
 #Simulation Prerequisites 
-
 data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
 
-if DIMENSIONS == 2:
-    gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
-elif DIMENSIONS == 3:
-    gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
-
 palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
-
-gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
-gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes
 gui_res = min(1080, n_grid) # Set the resolution of the GUI
 
-if DIMENSIONS== 2: 
+if DIMENSIONS == 2:
+    gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
+    gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
+    gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes  
     gui = ti.GUI("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in MPM - 2D", 
-                 res=gui_res, background_color=gui_background_color_white)
+                res=gui_res, background_color=gui_background_color_white)
 
-elif DIMENSIONS== 3: 
+elif DIMENSIONS == 3:
+    gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
+    # Initialize flume geometry
+    create_flume_vertices()
+    create_flume_indices()
+
     # Initialize the GUI
     gui = ti.ui.Window("Digital Twin of the NSF OSU LWF Facility - Tsunami Debris Simulation in MPM - 3D", res = (gui_res, gui_res))
     canvas = gui.get_canvas()
     scene = gui.get_scene()
     camera = ti.ui.Camera()
 
-    # Camera Setup
-    camera.position(0.5, 0.5, 2)
-    camera.lookat(0.00, 0.0, 0.0)
-    scene.set_camera(camera)
-
-    # Set up the light
-    scene.ambient_light((0.5, 0.5, 0.5))
-    scene.point_light(pos=(0.5, 1.5, 1.5), color=(1, 1, 1))
-
-# Saving Figures of the simulation
+# Saving Figures of the simulation (2D only so far)
 base_frame_dir = './Flume/figures/'
 os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
 frame_paths = []
@@ -789,11 +887,8 @@ for frame in range(sequence_length):
     elif DIMENSIONS == 3:
         # DO NOT USE MATPLOTLIB FOR 3D RENDERING
         # Update the scene with particle positions
-        scene.particles(x, radius=0.01, color=(0.5, 0.5, 1.0))
 
-        # Render the scene
-        canvas.scene(scene)
-
+        render_3D() # Show window is handled below 
         for event in gui.get_events(ti.ui.PRESS):
             if event.key == ti.ui.ESCAPE:
                 break
