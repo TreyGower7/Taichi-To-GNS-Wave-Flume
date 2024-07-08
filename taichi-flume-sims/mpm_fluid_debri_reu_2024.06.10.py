@@ -40,7 +40,7 @@ else:
     DIMENSIONS = 2
 
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
-output_png = False# Outputs png files and makes a gif out of them
+output_png = True# Outputs png files and makes a gif out of them
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
@@ -440,7 +440,9 @@ def g2p():
                 new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
-        apply_flume_boundary_conditions(p)
+        if ti.static(DIMENSIONS == 3):
+            apply_flume_boundary_conditions(p)
+
 
 @ti.func
 def handle_piston_collisions():
