@@ -19,10 +19,10 @@ if dim == '3d' or int(dim) == 3:
     DIMENSIONS = 3
     # Wave Flume Render 3d using grid_length as the flume length in 2D & 3D
     # https://engineering.oregonstate.edu/wave-lab/facilities/large-wave-flume
-    Flume_height_3d = 3.7 # meters
-    Flume_width_3d = 4.6 # meters
+    flume_height_3d = 3.7 # meters
+    flume_width_3d = 4.6 # meters
     # Max Water depth addition maybe 
-    # Max_water_depth_tsunami = 2 # meters
+    max_water_depth_tsunami = 2 # meters
     # Max_water_depth_wind_storm = 2.7 # meters
     # Define Taichi fields for flume geometry
     flume_vertices = ti.Vector.field(3, dtype=float, shape=8)
@@ -40,7 +40,7 @@ else:
     DIMENSIONS = 2
 
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
-output_png = True# Outputs png files and makes a gif out of them
+output_png = False# Outputs png files and makes a gif out of them
 print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else "disabled", " enabled" if output_png else "disabled"))
 
 # More bits = higher resolution, more accurate simulation, but slower and more memory usage
@@ -394,23 +394,23 @@ def apply_boundary_conditions(i, j, k):
 @ti.func
 def apply_flume_boundary_conditions(p):
     # Ensure particles stay within the flume dimensions in 3D
-    if x[p][0] < 0:
-        x[p][0] = 0
+    if x[p][0] < flume_vertices[0][0]:
+        x[p][0] = flume_vertices[0][0]
         v[p][0] = 0
-    if x[p][0] > grid_length:
-        x[p][0] = grid_length
+    if x[p][0] > flume_vertices[1][0]:
+        x[p][0] = flume_vertices[1][0]
         v[p][0] = 0
-    if x[p][1] < 0:
-        x[p][1] = 0
+    if x[p][1] < flume_vertices[0][1]:
+        x[p][1] = flume_vertices[0][1]
         v[p][1] = 0
-    if x[p][1] > Flume_height_3d:
-        x[p][1] = Flume_height_3d
+    if x[p][1] > flume_vertices[4][1]:
+        x[p][1] = flume_vertices[4][1]
         v[p][1] = 0
-    if x[p][2] < 0:
-        x[p][2] = 0
+    if x[p][2] < flume_vertices[0][2]:
+        x[p][2] = flume_vertices[0][2]
         v[p][2] = 0
-    if x[p][2] > Flume_width_3d:
-        x[p][2] = Flume_width_3d
+    if x[p][2] > flume_vertices[2][2]:
+        x[p][2] = flume_vertices[2][2]
         v[p][2] = 0
 
 
@@ -523,11 +523,9 @@ def reset():
                 ]
             if ti.static(DIMENSIONS == 3):
                 x[i] = [
-                    # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
-                    # ti.random() * 0.1 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
-                    (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),  # Fluid particles are spread over a wider x-range
-                    (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size),  # Fluid particles are spread over a wider y-range
-                    (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider z-range
+                    (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),
+                    (max_water_depth_tsunami / flume_height_3d) * flume_height_3d * (i // (row_size * (n_particles // row_size))),
+                    (flume_width_3d / grid_length) * (dx * particle_spacing_ratio) * (i // row_size)
                 ]
             material[i] = 0  # fluid
         else:
@@ -537,15 +535,16 @@ def reset():
             row_size = debris_row_size
             block_size = row_size**2
             debris_particle_x = ti.min(grid_length_x, (4*dx ) + (grid_length * (piston_start_x + piston_travel_x)) + (dx * particle_spacing_ratio) * ((id % row_size**2) % row_size) + grid_length * (16 * dx / grid_length) * (id // (row_size**2)))
-            debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
             if shape == 0:
                 if ti.static(DIMENSIONS == 2):
+                        debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
                         x[i] = [
                             debris_particle_x,  # Block particles are confined to a smaller x-range
                             debris_particle_y   # Block particles are confined to a smaller y-range
                         ]
                 elif ti.static(DIMENSIONS == 3):
-                    debris_particle_z = ti.min(grid_length_z, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    debris_particle_y = ti.min(flume_height_3d, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    debris_particle_z = ti.min(flume_width_3d, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
                     x[i] = [
                         debris_particle_x,  # Block particles are confined to a smaller x-range
                         debris_particle_y,   # Block particles are confined to a smaller y-range
@@ -747,12 +746,12 @@ def save_simulation():
 def create_flume_vertices():
     flume_vertices[0] = ti.Vector([0, 0, 0])
     flume_vertices[1] = ti.Vector([grid_length, 0, 0])
-    flume_vertices[2] = ti.Vector([grid_length, 0, Flume_width_3d])
-    flume_vertices[3] = ti.Vector([0, 0, Flume_width_3d])
-    flume_vertices[4] = ti.Vector([0, Flume_height_3d, 0])
-    flume_vertices[5] = ti.Vector([grid_length, Flume_height_3d, 0])
-    flume_vertices[6] = ti.Vector([grid_length, Flume_height_3d, Flume_width_3d])
-    flume_vertices[7] = ti.Vector([0, Flume_height_3d, Flume_width_3d])
+    flume_vertices[2] = ti.Vector([grid_length, 0, flume_width_3d])
+    flume_vertices[3] = ti.Vector([0, 0, flume_width_3d])
+    flume_vertices[4] = ti.Vector([0, flume_height_3d, 0])
+    flume_vertices[5] = ti.Vector([grid_length, flume_height_3d, 0])
+    flume_vertices[6] = ti.Vector([grid_length, flume_height_3d, flume_width_3d])
+    flume_vertices[7] = ti.Vector([0, flume_height_3d, flume_width_3d])
 
 @ti.kernel
 def create_flume_indices():
@@ -774,38 +773,71 @@ def create_flume_indices():
     frontwall[0], frontwall[1], frontwall[2] = 3, 7, 4
     frontwall[3], frontwall[4], frontwall[5] = 3, 4, 0
 
+@ti.kernel
+def copy_positions_to_field(source: ti.types.ndarray(), target: ti.template()):
+    for i in range(source.shape[0]):
+        for j in ti.static(range(3)):  # Assuming 3D positions
+            target[i][j] = source[i, j]
+
+@ti.kernel
+def copy_colors_to_field(source: ti.types.ndarray(), target: ti.template()):
+    for i in range(source.shape[0]):
+        for j in ti.static(range(3)):  # RGB colors
+            target[i][j] = source[i, j]
+
 def render_3D():
-    """
-    Renders the 3D wave flume and simulation
-    """
-    # Camera positioned based on flume parameters
-    camera.position(grid_length*1.2, Flume_height_3d*8, Flume_width_3d*6)
-    
-    # Camera looking at the center of the flume
-    camera.lookat(grid_length/2, Flume_height_3d/2, Flume_width_3d/2)
-    
-    # Set the up direction as the y-axis for congruency with particles
+    #camera.position(grid_length*1.2, flume_height_3d*10, flume_width_3d*8)
+    camera.position(grid_length*1.2, flume_height_3d*12, -flume_width_3d*.5)
+    camera.lookat(grid_length/2, flume_height_3d/2, flume_width_3d/2)
     camera.up(0, 1, 0)
-
     camera.fov(60)
-
-    # Set the camera for this frame
     scene.set_camera(camera)
 
-    # Set up the light
     scene.ambient_light((0.8, 0.8, 0.8))
-    scene.point_light(pos=(grid_length/2, Flume_height_3d*2, Flume_width_3d*2), color=(1, 1, 1))
+    scene.point_light(pos=(grid_length/2, flume_height_3d*2, flume_width_3d*2), color=(1, 1, 1))
 
     # Render the flume
-    # Render the bottom face
     scene.mesh(flume_vertices, bottom, color=bottom_color)
-    
-    # Render each face separately (if only taichi supported slicing)
     scene.mesh(flume_vertices, backwall, color=front_back_color)
     scene.mesh(flume_vertices, sidewalls, color=side_color)
     scene.mesh(flume_vertices, frontwall, color=front_back_color)
 
-    # Render the scene
+    # Render particles
+    positions_np = x.to_numpy()
+    colors_np = np.array([palette[material[i]] for i in range(n_particles)], dtype=np.float32)
+
+    # Create Taichi fields for positions and colors
+    positions_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
+    colors_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
+
+    # Copy data to Taichi fields
+    copy_positions_to_field(positions_np, positions_field)
+    copy_colors_to_field(colors_np, colors_field)
+
+    scene.particles(positions_field, per_vertex_color=colors_field, radius=0.002*grid_length)
+
+    # Render the piston
+    piston_pos_current = board_states[None][0]
+    piston_height = flume_height_3d
+    piston_width = flume_width_3d
+    piston_thickness = 0.1  # Adjust as needed
+    piston_vertices = ti.Vector.field(3, dtype=float, shape=8)
+    piston_indices = ti.field(dtype=int, shape=36)
+    @ti.kernel
+    def create_piston():
+        piston_vertices[0] = ti.Vector([piston_pos_current, 0, 0])
+        piston_vertices[1] = ti.Vector([piston_pos_current, 0, piston_width])
+        piston_vertices[2] = ti.Vector([piston_pos_current, piston_height, 0])
+        piston_vertices[3] = ti.Vector([piston_pos_current, piston_height, piston_width])
+        piston_vertices[4] = ti.Vector([piston_pos_current + piston_thickness, 0, 0])
+        piston_vertices[5] = ti.Vector([piston_pos_current + piston_thickness, 0, piston_width])
+        piston_vertices[6] = ti.Vector([piston_pos_current + piston_thickness, piston_height, 0])
+        piston_vertices[7] = ti.Vector([piston_pos_current + piston_thickness, piston_height, piston_width])
+
+    create_piston()
+    
+    scene.mesh(piston_vertices, piston_indices, color=(0.8, 0.8, 0.8))
+
     canvas.scene(scene)
 
 #Simulation Prerequisites 
@@ -815,6 +847,10 @@ fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user i
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
 
 palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
+palette = [(0x23/255, 0x89/255, 0xda/255), 
+           (0xED/255, 0x55/255, 0x3B/255), 
+           (0x06/255, 0x85/255, 0x87/255), 
+           (0x6D/255, 0x21/255, 0x4F/255)]
 gui_res = min(1080, n_grid) # Set the resolution of the GUI
 
 if DIMENSIONS == 2:
