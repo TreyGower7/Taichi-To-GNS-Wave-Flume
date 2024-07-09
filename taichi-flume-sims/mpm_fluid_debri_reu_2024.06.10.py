@@ -48,7 +48,7 @@ particle_quality_bits = 13 # Bits for particle count base unit, e.g. 13 = 2^13 =
 grid_quality_bits = 7 # Bits for grid nodes base unit in a direction, e.g. 7 = 2^7 = 128 grid nodes in a direction
 quality = 6 # Resolution multiplier that affects both particles and grid nodes by multiplying their base units w.r.t. dimensions
 
-grid_length = 102.4  # Max length of the simulation domain in any direction [meters]
+grid_length = 50  # Max length of the simulation domain in any direction [meters]
  
 # Best to use powers of 2 for mem allocation, e.g. 0.5, 0.25, 0.125, etc. 
 # Note: there are buffer grid-cells on either end of each dimension for multi-cell shape-function kernels and BCs
@@ -114,7 +114,7 @@ piston_pos = np.asarray(np.array([0.0, 0.0, 0.0])  \
             + (dx * np.array([4, 0, 0])), dtype=float) # Initial [X,Y,Z] position of the piston face
 piston_start_x = 4 * dx / grid_length
 piston_travel_x = piston_amplitude / grid_length
-piston_wait_time = 0.5 # don't immediately start the piston, let things settle with gravity first
+piston_wait_time = 0.1 # don't immediately start the piston, let things settle with gravity first
 
 # Calc timestep based on elastic moduli of materials
 CFL = 0.5 # CFL stability number. Typically 0.3 - 0.5 is good
@@ -378,17 +378,17 @@ def apply_boundary_conditions(i, j, k):
         if j > n_grid_y - 3 and grid_v[i, j][1] > 0:
             grid_v[i, j][1] = 0
     elif ti.static(DIMENSIONS == 3):
-        if i < 3 and grid_v[i, j, k][0] < 0: 
+        if i < 3 and grid_v[i, j, k][0] < 0:
             grid_v[i, j, k][0] = 0
-        if i > n_grid_x - 3 and grid_v[i, j, k][0] > 0: 
+        if i > n_grid_x - 3 and grid_v[i, j, k][0] > 0:
             grid_v[i, j, k][0] = 0
-        if j < 3 and grid_v[i, j, k][1] < 0: 
+        if j < 3 and grid_v[i, j, k][1] < 0:
             grid_v[i, j, k][1] = 0
-        if j > n_grid_y - 3 and grid_v[i, j, k][1] > 0: 
+        if j > n_grid_y - 3 and grid_v[i, j, k][1] > 0:
             grid_v[i, j, k][1] = 0
-        if k < 3 and grid_v[i, j, k][2] < 0: 
+        if k < 3 and grid_v[i, j, k][2] < 0:
             grid_v[i, j, k][2] = 0
-        if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0: 
+        if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0:
             grid_v[i, j, k][2] = 0
 
 @ti.func
@@ -522,10 +522,11 @@ def reset():
                     (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider y-range
                 ]
             if ti.static(DIMENSIONS == 3):
+                row_size_z = int(ti.ceil(flume_width_3d / (dx * particle_spacing_ratio)))
                 x[i] = [
-                    (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),
-                    (max_water_depth_tsunami / flume_height_3d) * flume_height_3d * (i // (row_size * (n_particles // row_size))),
-                    (flume_width_3d / grid_length) * (dx * particle_spacing_ratio) * (i // row_size)
+                (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),
+                (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size),
+                (dx * particle_spacing_ratio)  * (i // row_size_z)
                 ]
             material[i] = 0  # fluid
         else:
@@ -774,20 +775,15 @@ def create_flume_indices():
     frontwall[3], frontwall[4], frontwall[5] = 3, 4, 0
 
 @ti.kernel
-def copy_positions_to_field(source: ti.types.ndarray(), target: ti.template()):
+def copy_to_field(source: ti.types.ndarray(), target: ti.template(), source_c: ti.types.ndarray(), target_c: ti.template()):
     for i in range(source.shape[0]):
         for j in ti.static(range(3)):  # Assuming 3D positions
             target[i][j] = source[i, j]
-
-@ti.kernel
-def copy_colors_to_field(source: ti.types.ndarray(), target: ti.template()):
-    for i in range(source.shape[0]):
-        for j in ti.static(range(3)):  # RGB colors
-            target[i][j] = source[i, j]
+            target_c[i][j] = source_c[i, j]
 
 def render_3D():
     #camera.position(grid_length*1.2, flume_height_3d*10, flume_width_3d*8)
-    camera.position(grid_length*1.2, flume_height_3d*12, -flume_width_3d*.5)
+    camera.position(grid_length*.5, flume_height_3d*4, flume_width_3d*10)
     camera.lookat(grid_length/2, flume_height_3d/2, flume_width_3d/2)
     camera.up(0, 1, 0)
     camera.fov(60)
@@ -797,47 +793,23 @@ def render_3D():
     scene.point_light(pos=(grid_length/2, flume_height_3d*2, flume_width_3d*2), color=(1, 1, 1))
 
     # Render the flume
+    # Render the bottom face
     scene.mesh(flume_vertices, bottom, color=bottom_color)
+
+    # Render each face separately (if only taichi supported slicing)
     scene.mesh(flume_vertices, backwall, color=front_back_color)
     scene.mesh(flume_vertices, sidewalls, color=side_color)
     scene.mesh(flume_vertices, frontwall, color=front_back_color)
-
-    # Render particles
-    positions_np = x.to_numpy()
-    colors_np = np.array([palette[material[i]] for i in range(n_particles)], dtype=np.float32)
-
+    scene.particles(x, radius=0.002*grid_length, color=(50/255, 92/255, 168/255))
+    #positions_np = x.to_numpy()
+    #colors_np = np.array([palette[material[i]] for i in range(n_particles)], dtype=np.float32)
     # Create Taichi fields for positions and colors
-    positions_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
-    colors_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
-
+    #positions_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
+    #colors_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
     # Copy data to Taichi fields
-    copy_positions_to_field(positions_np, positions_field)
-    copy_colors_to_field(colors_np, colors_field)
+    #copy_to_field(positions_np, positions_field,colors_np, colors_field)
 
-    scene.particles(positions_field, per_vertex_color=colors_field, radius=0.002*grid_length)
-
-    # Render the piston
-    piston_pos_current = board_states[None][0]
-    piston_height = flume_height_3d
-    piston_width = flume_width_3d
-    piston_thickness = 0.1  # Adjust as needed
-    piston_vertices = ti.Vector.field(3, dtype=float, shape=8)
-    piston_indices = ti.field(dtype=int, shape=36)
-    @ti.kernel
-    def create_piston():
-        piston_vertices[0] = ti.Vector([piston_pos_current, 0, 0])
-        piston_vertices[1] = ti.Vector([piston_pos_current, 0, piston_width])
-        piston_vertices[2] = ti.Vector([piston_pos_current, piston_height, 0])
-        piston_vertices[3] = ti.Vector([piston_pos_current, piston_height, piston_width])
-        piston_vertices[4] = ti.Vector([piston_pos_current + piston_thickness, 0, 0])
-        piston_vertices[5] = ti.Vector([piston_pos_current + piston_thickness, 0, piston_width])
-        piston_vertices[6] = ti.Vector([piston_pos_current + piston_thickness, piston_height, 0])
-        piston_vertices[7] = ti.Vector([piston_pos_current + piston_thickness, piston_height, piston_width])
-
-    create_piston()
-    
-    scene.mesh(piston_vertices, piston_indices, color=(0.8, 0.8, 0.8))
-
+   # scene.particles(x, per_vertex_color=colors_field, radius=0.002*grid_length)
     canvas.scene(scene)
 
 #Simulation Prerequisites 
@@ -846,14 +818,11 @@ data_designation = str(input('What is the output particle data for? Select: Roll
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
 
-palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
-palette = [(0x23/255, 0x89/255, 0xda/255), 
-           (0xED/255, 0x55/255, 0x3B/255), 
-           (0x06/255, 0x85/255, 0x87/255), 
-           (0x6D/255, 0x21/255, 0x4F/255)]
+
 gui_res = min(1080, n_grid) # Set the resolution of the GUI
 
 if DIMENSIONS == 2:
+    palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
     gravity[None] = [0.0, -9.80665] # Gravity in m/s^2, this implies use of metric units
     gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
     gui_background_color_taichi= 0x112F41 # Taichi default background color, may be easier on the eyes  
@@ -861,6 +830,10 @@ if DIMENSIONS == 2:
                 res=gui_res, background_color=gui_background_color_white)
 
 elif DIMENSIONS == 3:
+    palette = [(0x23, 0x89, 0xda), 
+            (0xED, 0x55, 0x3B), 
+            (0x06, 0x85, 0x87), 
+            (0x6D, 0x21, 0x4F)]
     gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
     # Initialize flume geometry
     create_flume_vertices()
