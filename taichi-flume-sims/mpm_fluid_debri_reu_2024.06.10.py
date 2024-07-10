@@ -72,7 +72,7 @@ dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
 n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 20000
+n_particles = 100000
 downsampling = True
 downsampling_ratio = 100 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
@@ -508,13 +508,15 @@ def reset():
     basin_row_size = int(ti.floor((1.0 - piston_start_x) * n_grid_x * particles_per_dx) - 3)
     debris_row_size = int(ti.floor(4 * particles_per_dx))
     for i in range(n_particles):
-        row_size = basin_row_size
+        row_size = basin_row_size 
         # j = i // row_size
         water_ratio_numerator = water_ratio_denominator - 1
         n_water_particles = water_ratio_numerator * group_size
         if i < n_water_particles:
             if ti.static(DIMENSIONS == 2):
             # ppc = 4
+            # x is: scaled starting pos * position spacing * even distribution along x
+            # y is: Base offset * position spacing * how many rows placed for spacing
                 x[i] = [
                     # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
                     # ti.random() * 0.1 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
@@ -522,11 +524,11 @@ def reset():
                     (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider y-range
                 ]
             if ti.static(DIMENSIONS == 3):
-                row_size_z = int(ti.ceil(flume_width_3d / (dx * particle_spacing_ratio)))
+                row_size_z = int(ti.floor((flume_width_3d / (dx * particle_spacing_ratio)) - 3))
                 x[i] = [
-                (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),
-                (4 * dx) + (dx * particle_spacing_ratio) * (i // row_size),
-                (dx * particle_spacing_ratio)  * (i // row_size_z)
+                    (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),  # x-position
+                    (4 * dx) + (dx * particle_spacing_ratio) * ((i // row_size)), # y-position
+                    (piston_start_x * flume_width_3d) + (dx * particle_spacing_ratio) * (i % row_size_z),  # z-position
                 ]
             material[i] = 0  # fluid
         else:
@@ -728,20 +730,7 @@ def save_simulation():
         
     print("Simulation Data Saved to: ", file_path)
 
-
 # Define a Taichi field to store the result
-#def downsample(X_data):
-
-    # Reshape the array
-#    Y = X_data.reshape(2, sequence_length, 2, 750, 2, 2)
-
-    # Sum over the specified axes
-#    Z = np.sum(Y, axis=(0, 2, 4)) / 8
-
-    # Squeeze the resulting array to ensure removal of singleton dimensions
-#    Z = np.squeeze(Z)
-
-#    return Z
     
 @ti.kernel
 def create_flume_vertices():
@@ -775,15 +764,16 @@ def create_flume_indices():
     frontwall[3], frontwall[4], frontwall[5] = 3, 4, 0
 
 @ti.kernel
-def copy_to_field(source: ti.types.ndarray(), target: ti.template(), source_c: ti.types.ndarray(), target_c: ti.template()):
+def copy_to_field(source: ti.types.ndarray(), target: ti.template()):
     for i in range(source.shape[0]):
         for j in ti.static(range(3)):  # Assuming 3D positions
             target[i][j] = source[i, j]
-            target_c[i][j] = source_c[i, j]
 
 def render_3D():
-    #camera.position(grid_length*1.2, flume_height_3d*10, flume_width_3d*8)
-    camera.position(grid_length*.5, flume_height_3d*4, flume_width_3d*10)
+    #camera.position(grid_length*1.2, flume_height_3d*10, flume_width_3d*8) #Actual Camera to use
+    #camera.position(grid_length*1.5, flume_height_3d*4, flume_width_3d*6) # 50m flume camera
+    camera.position(grid_length*1.5, flume_height_3d*4, flume_width_3d*.5) # Front View
+
     camera.lookat(grid_length/2, flume_height_3d/2, flume_width_3d/2)
     camera.up(0, 1, 0)
     camera.fov(60)
@@ -800,16 +790,14 @@ def render_3D():
     scene.mesh(flume_vertices, backwall, color=front_back_color)
     scene.mesh(flume_vertices, sidewalls, color=side_color)
     scene.mesh(flume_vertices, frontwall, color=front_back_color)
-    scene.particles(x, radius=0.002*grid_length, color=(50/255, 92/255, 168/255))
-    #positions_np = x.to_numpy()
-    #colors_np = np.array([palette[material[i]] for i in range(n_particles)], dtype=np.float32)
-    # Create Taichi fields for positions and colors
-    #positions_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
-    #colors_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
+    #scene.particles(x, radius=0.002*grid_length, color=(50/255, 92/255, 168/255))
+    # Scale the color palette for 3d by how many materials we want
+    colors_np = np.array([palette[material[i]] for i in range(n_particles)], dtype=np.float32)
+    colors_field = ti.Vector.field(3, dtype=ti.f32, shape=n_particles)
     # Copy data to Taichi fields
-    #copy_to_field(positions_np, positions_field,colors_np, colors_field)
+    copy_to_field(colors_np, colors_field)
 
-   # scene.particles(x, per_vertex_color=colors_field, radius=0.002*grid_length)
+    scene.particles(x, per_vertex_color=colors_field, radius=0.002*grid_length)
     canvas.scene(scene)
 
 #Simulation Prerequisites 
@@ -830,10 +818,10 @@ if DIMENSIONS == 2:
                 res=gui_res, background_color=gui_background_color_white)
 
 elif DIMENSIONS == 3:
-    palette = [(0x23, 0x89, 0xda), 
-            (0xED, 0x55, 0x3B), 
-            (0x06, 0x85, 0x87), 
-            (0x6D, 0x21, 0x4F)]
+    palette = [(35/255, 137/255, 218/255), 
+           (237/255, 85/255, 59/255), 
+           (6/255, 133/255, 135/255), 
+           (109/255, 33/255, 79/255)]
     gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
     # Initialize flume geometry
     create_flume_vertices()
