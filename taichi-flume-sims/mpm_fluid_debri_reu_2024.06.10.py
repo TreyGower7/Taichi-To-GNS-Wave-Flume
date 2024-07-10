@@ -392,29 +392,6 @@ def apply_boundary_conditions(i, j, k):
             grid_v[i, j, k][2] = 0
 
 @ti.func
-def apply_flume_boundary_conditions(p):
-    # Ensure particles stay within the flume dimensions in 3D
-    if x[p][0] < flume_vertices[0][0]:
-        x[p][0] = flume_vertices[0][0]
-        v[p][0] = 0
-    if x[p][0] > flume_vertices[1][0]:
-        x[p][0] = flume_vertices[1][0]
-        v[p][0] = 0
-    if x[p][1] < flume_vertices[0][1]:
-        x[p][1] = flume_vertices[0][1]
-        v[p][1] = 0
-    if x[p][1] > flume_vertices[4][1]:
-        x[p][1] = flume_vertices[4][1]
-        v[p][1] = 0
-    if x[p][2] < flume_vertices[0][2]:
-        x[p][2] = flume_vertices[0][2]
-        v[p][2] = 0
-    if x[p][2] > flume_vertices[2][2]:
-        x[p][2] = flume_vertices[2][2]
-        v[p][2] = 0
-
-
-@ti.func
 def g2p():
     for p in x:  # grid to particle (G2P)
         base = (x[p] * inv_dx - 0.5).cast(int)
@@ -440,8 +417,6 @@ def g2p():
                 new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
         v[p], C[p] = new_v, new_C
         x[p] += dt * v[p]  # advection
-        if ti.static(DIMENSIONS == 3):
-            apply_flume_boundary_conditions(p)
 
 
 @ti.func
