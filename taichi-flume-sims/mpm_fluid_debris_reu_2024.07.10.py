@@ -16,6 +16,7 @@ from matplotlib import cm
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
+system = platform.system().lower() # Useful for defining the sim environment
 
 flume_shorten_ratio = 1.0 # Halve the flume length for testing purposes
 flume_thin_ratio = 1.0
@@ -307,7 +308,11 @@ F = ti.Matrix.field(DIMENSIONS, DIMENSIONS, dtype=float, shape=n_particles)  # d
 material = ti.field(dtype=int, shape=n_particles)  # material id
 Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
 
-x.from_numpy( xyz.astype(float) ) # Load in the particle positions we made for the water and debris field
+if system == 'darwin':  # 'Darwin' is the system name for macOS
+    x.from_numpy( xyz.astype(np.float32) ) # Load in the particle positions we made for the water and debris field
+else:
+    x.from_numpy( xyz.astype(float) ) # Load in the particle positions we made for the water and debris field
+
 xyz = None # Clear the numpy array to save memory
 material.from_numpy( material_id_numpy.astype(int) ) # Load in the material ids for the water and debris field
 material_id_numpy = None # Clear the numpy array to save memory
@@ -877,8 +882,6 @@ def save_simulation():
     global data
 
     # Define file_path to save to data, models, rollout folder. Located in directory of this file script
-
-    system = platform.system().lower()
 
     if system == 'linux':
         file_path = "./Flume/dataset"
