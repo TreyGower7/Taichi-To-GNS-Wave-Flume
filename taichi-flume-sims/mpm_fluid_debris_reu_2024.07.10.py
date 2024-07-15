@@ -291,6 +291,7 @@ time = 0.0
 #Define some parameters we would like to track
 data_to_save = [] #used for saving positional data for particles 
 v_data_to_save = []
+
 bounds = [[0.0 + buffer_cells / n_grid, flume_length_3d / grid_length + buffer_cells / n_grid], [0.0 + buffer_cells / n_grid, flume_height_3d / grid_length + buffer_cells / n_grid], [0.0 + buffer_cells / n_grid, flume_width_3d / grid_length + buffer_cells / n_grid]] # For 3D
 
 # bounds = [[0.1, 0.9], [0.1, 0.9], [0.1, 0.9]] # For 3D
@@ -1004,7 +1005,6 @@ def create_flume_indices():
     frontwall[0], frontwall[1], frontwall[2] = 3, 7, 4
     frontwall[3], frontwall[4], frontwall[5] = 3, 4, 0
 
-# def copy_to_field(source: ti.types.ndarray, target: ti.template):
 @ti.kernel
 def copy_to_field(source: ti.types.ndarray(), target: ti.template()):
     for i in range(source.shape[0]):
@@ -1047,7 +1047,9 @@ data_designation = str(input('What is the output particle data for? Select: Roll
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
-
+# Preallocate numpy arrays to store particle positions and velocities
+x_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32) # float 32 for mac compatibility
+v_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32)
 
 
 
@@ -1119,9 +1121,12 @@ for frame in range(sequence_length):
 
     
     #Change to tiachi fields probably
-    data_to_save.append(x.to_numpy())
-    v_data_to_save.append(v.to_numpy())
-    
+    data_to_save.append(x.to_numpy()) # Save particle positions for each substep
+    v_data_to_save.append(v.to_numpy()) # Save particle velocities for each substep
+
+    #x_data_gns[frame, :, :] = x.to_numpy() # Save particle positions for each substep
+    #v_data_gns[frame, :, :] = v.to_numpy() # Save particle velocities for each substep
+
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     # print("TestHex: ", int('0x000000',0))
     # print(cm.plasma(x.to_numpy()[:, 1] / flume_height_3d)[:,:3].max())
