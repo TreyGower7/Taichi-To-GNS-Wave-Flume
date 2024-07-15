@@ -15,14 +15,73 @@ import time as T
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
+
+bspline_kernel_order = 2 # Quadratic BSpline kernel, can also use cubic efficiently (1/3 dx^2) with MLS-MPM but not impl. below, see Yuanming Hu's 2018 paper
+buffer_cells = int(bspline_kernel_order + 1)
+
+grid_length = 102.4 # Maximum length of domain in a direction (incl. boundary buffers), [meters]
+init_water_depth = 2.0 # Set experiments desired SWL, [meters]
+
+# Facility: OSU LWF
+# Oregon State University's Large Wave Flume - Hinsdale Wave Research Laboratory
+# https://engineering.oregonstate.edu/wave-lab/facilities/large-wave-flume
+# Flume dimensions: 89.5m x 4.65m x 3.65m (L x H x W)
+max_water_depth_tsunami = 2.0 # meters
+max_water_depth_surge   = 2.7 # meters
+wave_type = "tsunami" # "solitary", "tsunami" / "irregular", "surge" / "regular" / "wind" / "sinusoidal"
+
+# Set max water depth at start of experiment, Note: the wave elevation can exceed this during the test
+if (wave_type == "tsunami" or wave_type == "solitary" or wave_type == "irregular"):
+    max_water_depth_case = max_water_depth_tsunami # meters
+    max_wave_height_case = 1.4 # meters
+    max_wave_depth_case =  max_water_depth_case + max_wave_height_case # meters
+elif (wave_type == "surge" or wave_type == "wind" or wave_type == "sinusoidal" or wave_type == "regular"):
+    max_water_depth_case = max_water_depth_surge # meters
+    max_wave_height_case = 1.7 # meters
+    max_wave_depth_case =  max_water_depth_case + max_wave_height_case # meters
+else:
+    max_water_depth_case = 4.6 # any higher and water overflows the real flume's height into the facility [m]
+    max_wave_height_case = 0.0 # meters
+    max_wave_depth_case = max_water_depth_case + max_wave_height_case # meters
+init_water_depth = max(min(init_water_depth, max_water_depth_case), 0.0) # Clamp to allowable depths for OSU LWF
+
+
 if dim == '3d' or int(dim) == 3:
     DIMENSIONS = 3
     # Wave Flume Render 3d using grid_length as the flume length in 2D & 3D
     # https://engineering.oregonstate.edu/wave-lab/facilities/large-wave-flume
-    flume_height_3d = 3.7 # meters
-    flume_width_3d = 4.6 # meters
+    
+    flume_origin = ti.Vector([0.0, 0.0, 0.0])  # Origin of the wave flume
+    offset_origin = ti.Vector([0.0, 0.0, 0.0])  # Offset origin for the flume
+    flume_dimensions = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
+    domain_dimensions = ti.Vector.field(DIMENSIONS, dtype=float, shape=())
+    domain_to_buffered_flume_ratio = ti.Vector.field(DIMENSIONS, dtype=int, shape=())
+
+    
+    flume_dimensions[None] = ti.Vector([89.5, 4.65, 3.65]) # Wave-flume facility bounding box [meters], (x = flow length, y = height, z = flow-perp. width)
+    flume_length = flume_dimensions[None][0] # meters
+    flume_height = flume_dimensions[None][1] # meters
+    flume_width = flume_dimensions[None][2] # meters
+    
+    domain_to_buffered_flume_ratio[None] = ti.Vector([1, 22, 24]) # Ratio of domain to flume dimensions
+    for i in range(DIMENSIONS):
+        if (domain_to_buffered_flume_ratio[None][i] < 1):
+            print("Domain to flume ratio on axis {} is less than 1, please adjust the domain to be larger or the flume smaller".format(i))
+            exit()
+    domain_dimensions[None] = ti.Vector([grid_length/domain_to_buffered_flume_ratio[None][0], grid_length/domain_to_buffered_flume_ratio[None][1], grid_length/domain_to_buffered_flume_ratio[None][2]]) # meters
+    for i in range(DIMENSIONS):
+        if (domain_dimensions[None][i] < flume_dimensions[None][i] - 2*buffer_cells):
+            print("Domain dimensions on axis {} are smaller than the flume dimensions, please adjust the domain to be larger or the flume smaller".format(i))
+            exit()
+    
+    grid_length = max(max(domain_dimensions[None][0], domain_dimensions[None][1]), domain_dimensions[None][2]) # Max length of the simulation domain in any direction [meters]
+
+    
+
+    # Can make code a bit more readable, though indices could be enumerators instead
+
     # Max Water depth addition maybe 
-    max_water_depth_tsunami = 2 # meters
+    
     # Max_water_depth_wind_storm = 2.7 # meters
     # Define Taichi fields for flume geometry
     flume_vertices = ti.Vector.field(3, dtype=float, shape=8)
@@ -39,14 +98,7 @@ if dim == '3d' or int(dim) == 3:
 else:
     DIMENSIONS = 2
 
-
-particles_per_dx = 4
-particles_per_cell = particles_per_dx ** DIMENSIONS
-print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
-particles_per_cell =int(input("Set the PPC, [Waiting for user input...] -->:"))
-# get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
-particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS)))
-
+    
 use_vulkan_gui = False # Needed for Windows WSL currently, and any non-vulkan systems - Turn on if you want to use the faster new GUI renderer
 output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
 output_png = True # Outputs png files and makes a gif out of them
@@ -57,37 +109,49 @@ particle_quality_bits = 13 # Bits for particle count base unit, e.g. 13 = 2^13 =
 grid_quality_bits = 7 # Bits for grid nodes base unit in a direction, e.g. 7 = 2^7 = 128 grid nodes in a direction
 quality = 6 # Resolution multiplier that affects both particles and grid nodes by multiplying their base units w.r.t. dimensions
 
-#Using a shorter length means that grid_ratio_y and z may need to increase to be closer to 1 since the domain becomes more like a cube as opposed to a long flume. May be better to work with the full length for now
-grid_length = 102.4  # Max length of the simulation domain in any direction [meters]
- 
- 
-# While we are working on getting 3D working, lets reduce the flume width (z) from 3.7 to 0.5 to avoid memory limits
-# 3d sims get big very fast
- 
-# Best to use powers of 2 for mem allocation, e.g. 0.5, 0.25, 0.125, etc. 
-# Note: there are buffer grid-cells on either end of each dimension for multi-cell shape-function kernels and BCs
-grid_ratio_x = 1.0000
-grid_ratio_y = 0.0625 * 2
-grid_ratio_z = 0.0625 * 2
-grid_length_x = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_x))
-grid_length_y = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_y))
-grid_length_z = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_z))
+particles_per_dx = 4
+particles_per_cell = particles_per_dx ** DIMENSIONS
 
+n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
+n_particles = n_particles_base * (quality**DIMENSIONS)
+n_particles = 50000
 
 n_grid_base = 2 ** grid_quality_bits # Using pow-2 grid-size for improved GPU mem usage / performance 
 n_grid = n_grid_base * quality
 
 n_grid = 512
+
+print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
+particles_per_cell =int(input("Set the PPC, [Waiting for user input...] -->:"))
+# get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
+particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS)))
+
+
+#Using a shorter length means that grid_ratio_y and z may need to increase to be closer to 1 since the domain becomes more like a cube as opposed to a long flume. May be better to work with the full length for now
+# While we are working on getting 3D working, lets reduce the flume width (z) from 3.7 to 0.5 to avoid memory limits
+# 3d sims get big very fast
+ 
+# Best to use powers of 2 for mem allocation, e.g. 0.5, 0.25, 0.125, etc. 
+# Note: there are buffer grid-cells on either end of each dimension for multi-cell shape-function kernels and BCs
+# grid_ratio_x = 1/domain_to_buffered_flume_ratio[None][0]
+# grid_ratio_y = 1/domain_to_buffered_flume_ratio[None][1]
+# grid_ratio_z = 1/domain_to_buffered_flume_ratio[None][2]
+
+
+grid_ratio_x = 1.0000
+grid_ratio_y = 0.0625 * 2
+grid_ratio_z = 0.0625 * 2
+
+grid_length_x = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_x))
+grid_length_y = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_y))
+grid_length_z = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_z))
+
 n_grid_x = int(ti.max(n_grid * ti.min(grid_ratio_x, 1), 1))
 n_grid_y = int(ti.max(n_grid * ti.min(grid_ratio_y, 1), 1))
 n_grid_z = int(ti.max(n_grid * ti.min(grid_ratio_z, 1), 1))
 # n_grid_total = int(ti.max(n_grid_x,1) * ti.max(n_grid_y,1)) 
 n_grid_total = int(ti.max(n_grid_x,1) * ti.max(n_grid_y,1) * ti.max(n_grid_z,1)) # Define this to work in 2d and 3d
 dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
-
-n_particles_base = 2 ** particle_quality_bits # Better ways to do this, shouldnt have to set it manually
-n_particles = n_particles_base * (quality**DIMENSIONS)
-n_particles = 100000
 downsampling = True
 downsampling_ratio = 1000 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
@@ -101,7 +165,7 @@ print("Number of Downsampled Particles: ", int(n_particles / downsampling_ratio)
 T.sleep(1)
 print("Number of Grid-Nodes each Direction: ", n_grid_x, n_grid_y, n_grid_z)
 print("dx: ", dx)
-
+buffer_offset = buffer_cells * dx
 
 # Material properties
 print("Particles-per-Dx: ", particles_per_dx)
@@ -112,7 +176,7 @@ particle_volume_ratio = 1.0 / particles_per_cell
 particle_volume = (dx ** DIMENSIONS) * particle_volume_ratio
 p_vol, p_rho = particle_volume, 1000.0
 p_mass = p_vol * p_rho
-E, nu = 1e7, 0.2  # Young's modulus and Poisson's ratio
+E, nu = 2e7, 0.2  # Young's modulus and Poisson's ratio
 # TODO: Define material laws for various materials
 gamma_water = 7.125 #Ratio of specific heats for water 
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
@@ -148,8 +212,6 @@ else:
     # Manual
     dt = 1e-4 / max(abs(quality),1)
 print("dt = ", dt)
-
-bspline_kernel_order = 2 # Quadratic BSpline kernel
 
 
 #Added parameters for piston and particle interaction
@@ -402,13 +464,19 @@ def apply_boundary_conditions(i, j, k):
             grid_v[i, j, k][0] = 0
         if i > n_grid_x - 3 and grid_v[i, j, k][0] > 0:
             grid_v[i, j, k][0] = 0
+        if i > flume_length / grid_length * inv_dx - 3 and grid_v[i, j, k][0] > 0:
+            grid_v[i, j, k][0] = 0
         if j < 3 and grid_v[i, j, k][1] < 0:
             grid_v[i, j, k][1] = 0
         if j > n_grid_y - 3 and grid_v[i, j, k][1] > 0:
             grid_v[i, j, k][1] = 0
+        if j > flume_height / grid_length * inv_dx - 3 and grid_v[i, j, k][1] > 0:
+            grid_v[i, j, k][1] = 0
         if k < 3 and grid_v[i, j, k][2] < 0:
             grid_v[i, j, k][2] = 0
         if k > n_grid_z - 3 and grid_v[i, j, k][2] > 0:
+            grid_v[i, j, k][2] = 0
+        if k > flume_width / grid_length * inv_dx - 3 and grid_v[i, j, k][2] > 0:
             grid_v[i, j, k][2] = 0
 
 @ti.func
@@ -499,6 +567,13 @@ def move_board_solitary():
 @ti.kernel
 def reset():
     water_ratio_denominator = 64
+    
+    number_of_debris_x = 8
+    number_of_debris_y = 1
+    number_of_debris_z = 1
+    debris_length = 0.25
+    debris_height = 0.25
+    debris_width = 0.25
     group_size = n_particles // water_ratio_denominator
     basin_row_size = int(ti.floor((1.0 - piston_start_x) * n_grid_x * particles_per_dx) - 3)
     debris_row_size = int(ti.floor(4 * particles_per_dx))
@@ -507,6 +582,7 @@ def reset():
         # j = i // row_size
         water_ratio_numerator = water_ratio_denominator - 1
         n_water_particles = water_ratio_numerator * group_size
+        # n_water_particles = n_particles
         if i < n_water_particles:
             if ti.static(DIMENSIONS == 2):
             # ppc = 4
@@ -520,12 +596,14 @@ def reset():
                 ]
             if ti.static(DIMENSIONS == 3):
                 row_size_x = i % row_size
-                row_size_y = ((i // row_size) % int(ti.floor(((max_water_depth_tsunami / (dx) - 3)* particles_per_dx)) ))
-                row_size_z = ((i // row_size) // int(ti.floor(((max_water_depth_tsunami / (dx) - 3)* particles_per_dx)) )) # will later add checks for init within the flume (i.e. dont init outside of it )
-                # row_size_z = (i % row_size_y) // int(ti.floor((flume_width_3d / (dx * particle_spacing_ratio)) - 3))
-                # row_size_z = int(ti.floor((flume_width_3d / (dx * particle_spacing_ratio)) - 3))
+                row_size_y = ((i // row_size) % int(ti.floor(((max_water_depth_case / (dx) - 3)* particles_per_dx)) ))
+                row_size_z = (((i // row_size) // int(ti.floor(((max_water_depth_case / (dx) - 3)* particles_per_dx)) ))) % int(ti.floor(((flume_width / (dx))* particles_per_dx))) # will later add checks for init within the flume (i.e. dont init outside of it )
+                # row_size_z = (i % row_size_y) // int(ti.floor((flume_width / (dx * particle_spacing_ratio)) - 3))
+                # row_size_z = int(ti.floor((flume_width / (dx * particle_spacing_ratio)) - 3))
                 x[i] = [
                     (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * row_size_x,  # x-position
+                    # ti.min(max_water_depth_case + (4*dx), (4*dx) + (dx * particle_spacing_ratio) * row_size_y), # y-position
+                    # ti.min(flume_width, (4*dx) + (dx * particle_spacing_ratio) * row_size_z)  # z-position
                     (4 * dx) + (dx * particle_spacing_ratio) * row_size_y, # y-position
                     (4 * dx) + (dx * particle_spacing_ratio) * row_size_z,  # z-position
                 ]
@@ -533,6 +611,7 @@ def reset():
         else:
             # Choose shape
             shape = 0
+            debris_height = 0.1
             id = i % (n_water_particles)
             row_size = debris_row_size
             block_size = row_size**2
@@ -545,8 +624,11 @@ def reset():
                             debris_particle_y   # Block particles are confined to a smaller y-range
                         ]
                 elif ti.static(DIMENSIONS == 3):
-                    debris_particle_y = ti.min(flume_height_3d, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
-                    debris_particle_z = ti.min(flume_width_3d, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    debris_particle_y = ti.min(flume_height, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    debris_particle_z = ti.min(flume_width,  (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    # debris_particle_z = ti.min(flume_width + buffer_offset, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    # debris_particle_y = ti.min(flume_height, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
+                    # debris_particle_z = ti.min(flume_width, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
                     x[i] = [
                         debris_particle_x,  # Block particles are confined to a smaller x-range
                         debris_particle_y,   # Block particles are confined to a smaller y-range
@@ -735,12 +817,12 @@ def save_simulation():
 def create_flume_vertices():
     flume_vertices[0] = ti.Vector([0, 0, 0])
     flume_vertices[1] = ti.Vector([grid_length, 0, 0])
-    flume_vertices[2] = ti.Vector([grid_length, 0, flume_width_3d])
-    flume_vertices[3] = ti.Vector([0, 0, flume_width_3d])
-    flume_vertices[4] = ti.Vector([0, flume_height_3d, 0])
-    flume_vertices[5] = ti.Vector([grid_length, flume_height_3d, 0])
-    flume_vertices[6] = ti.Vector([grid_length, flume_height_3d, flume_width_3d])
-    flume_vertices[7] = ti.Vector([0, flume_height_3d, flume_width_3d])
+    flume_vertices[2] = ti.Vector([grid_length, 0, flume_width])
+    flume_vertices[3] = ti.Vector([0, 0, flume_width])
+    flume_vertices[4] = ti.Vector([0, flume_height, 0])
+    flume_vertices[5] = ti.Vector([grid_length, flume_height, 0])
+    flume_vertices[6] = ti.Vector([grid_length, flume_height, flume_width])
+    flume_vertices[7] = ti.Vector([0, flume_height, flume_width])
 
 @ti.kernel
 def create_flume_indices():
@@ -768,18 +850,18 @@ def copy_to_field(source: ti.types.ndarray(), target: ti.template()):
         for j in ti.static(range(3)):  # Assuming 3D positions
             target[i][j] = source[i, j]
 
-def render_3D():
-    #camera.position(grid_length*1.2, flume_height_3d*10, flume_width_3d*8) #Actual Camera to use
-    #camera.position(grid_length*1.5, flume_height_3d*4, flume_width_3d*6) # 50m flume camera
-    camera.position(grid_length*1.5, flume_height_3d*4, flume_width_3d*.5) # Front View
+def render():
+    #camera.position(grid_length*1.2, flume_height*10, flume_width*8) #Actual Camera to use
+    #camera.position(grid_length*1.5, flume_height*4, flume_width*6) # 50m flume camera
+    camera.position(grid_length*1.5, flume_height*4, flume_width*.5) # Front View
 
-    camera.lookat(grid_length/2, flume_height_3d/2, flume_width_3d/2)
+    camera.lookat(grid_length/2, flume_height/2, flume_width/2)
     camera.up(0, 1, 0)
     camera.fov(60)
     scene.set_camera(camera)
 
     scene.ambient_light((0.8, 0.8, 0.8))
-    scene.point_light(pos=(grid_length/2, flume_height_3d*2, flume_width_3d*2), color=(1, 1, 1))
+    scene.point_light(pos=(grid_length/2, flume_height*2, flume_width*2), color=(1, 1, 1))
 
     # Render the flume
     # Render the bottom face
@@ -809,7 +891,10 @@ sequence_length = int(input('How many seconds to run this simulations? [Waiting 
 
 
 
+# gui_res = max(max(min(min(1024, n_grid*4),n_grid*2),n_grid),720) # Set the resolution of the GUI
+
 gui_res = min(1024, n_grid) # Set the resolution of the GUI
+gui_res = 1024
 
 if DIMENSIONS == 2:
     palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
@@ -901,7 +986,7 @@ for frame in range(sequence_length):
 
         if (use_vulkan_gui):
 
-            render_3D() # Show window is handled below 
+            render() # Show window is handled below 
             # gui.update()
             for event in gui.get_events(ti.ui.PRESS):
                 if event.key == ti.ui.ESCAPE:

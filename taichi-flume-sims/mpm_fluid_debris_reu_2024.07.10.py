@@ -51,7 +51,7 @@ else:
 particles_per_dx = 4
 particles_per_cell = particles_per_dx ** DIMENSIONS
 print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
-particles_per_cell =int(input("Set the PPC, [Waiting for user input...] -->:"))
+particles_per_cell =float(input("Set the PPC, [Waiting for user input...] -->:"))
 # get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
 particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS)))
 
@@ -75,7 +75,7 @@ quality = 6 # Resolution multiplier that affects both particles and grid nodes b
 n_grid_base = 2 ** grid_quality_bits # Using pow-2 grid-size for improved GPU mem usage / performance 
 n_grid = n_grid_base * quality
 
-n_grid = 512
+n_grid = 1024
 dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
 # Best to use powers of 2 for mem allocation, e.g. 0.5, 0.25, 0.125, etc. 
@@ -248,7 +248,7 @@ material_id_numpy[n_particles_water:(n_particles_water + n_particles_debris_grou
 # Material properties
 p_vol, p_rho = particle_volume, 1000.0
 p_mass = p_vol * p_rho
-E, nu = 1e8, 0.3  # Young's modulus and Poisson's ratio
+E, nu = 2e7, 0.25  # Young's modulus and Poisson's ratio
 # TODO: Define material laws for various materials
 gamma_water = 7.125 #Ratio of specific heats for water 
 mu_0, lambda_0 = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
@@ -1084,7 +1084,7 @@ elif DIMENSIONS == 3 and use_vulkan_gui:
     camera = ti.ui.Camera()
 
 elif DIMENSIONS == 3 and not use_vulkan_gui:
-    gui_res_for_multi_viewport = (int(1.0*(flume_length_3d + flume_length_3d) / grid_length * gui_res_base), int(1.75*(grid_length_y + grid_length_z) / grid_length * gui_res_base))
+    gui_res_for_multi_viewport = (int(1.0*(flume_length_3d + flume_length_3d) / grid_length * gui_res_base), int(1.75*(grid_length_y + grid_length_z) / grid_length * gui_res_base)) 
     palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
     gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
     gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
