@@ -292,7 +292,7 @@ print("Debris Group Offset: ", debris_offset)
 print("XYZ Debris Shape: ", xyz_debris.shape)
 print("XYZ Debris Group Shape: ", xyz_debris_group.shape)
 
-max_base_y = np.max(xyz_water[:, 1]) # Gets Baseline y value before wave
+max_base_y = np.max(xyz_water[:, 1]) # Gets Baseline y value before wave might change how I get this in main loop.
 
 # Combine the water and debris particle positions
 xyz = np.concatenate((xyz_water, xyz_debris_group), axis=0)
@@ -319,11 +319,10 @@ downsampling = True
 downsampling_ratio = 1000 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
-# T.sleep(1)
 print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
-# T.sleep(1)
+
 print("Number of Downsampled Particles: ", int(n_particles / downsampling_ratio))
-# T.sleep(1)
+
 print("Number of Grid-Nodes each Direction: ", n_grid_x, n_grid_y, n_grid_z)
 print("dx: ", dx)
 
@@ -925,69 +924,6 @@ def reset():
         board_states[None] = [float(piston_pos[0]), 0.0]  # Initial piston position
     elif ti.static(DIMENSIONS == 3):
         board_states[None] = [float(piston_pos[0]), 0.0, 0.0]  # Initial piston position
-    
-    # water_ratio_denominator = 64
-    # group_size = n_particles // water_ratio_denominator
-    # basin_row_size = int(ti.floor((flume_length_3d) / grid_length * n_grid * particles_per_dx))
-    # debris_row_size = int(ti.floor(4 * particles_per_dx))
-   
-    # for i in range(n_particles):
-        
-    #     row_size = basin_row_size 
-    #     # j = i // row_size
-    #     water_ratio_numerator = water_ratio_denominator - 1
-    #     n_water_particles = water_ratio_numerator * group_size
-    #     if i < n_water_particles:
-    #         if ti.static(DIMENSIONS == 2):
-    #         # ppc = 4
-    #         # x is: scaled starting pos * position spacing * even distribution along x
-    #         # y is: Base offset * position spacing * how many rows placed for spacing
-    #             x[i] = [
-    #                 # ti.random() * 0.8 + 0.01 * (i // group_size),  # Fluid particles are spread over a wider x-range
-    #                 # ti.random() * 0.1 + 0.01 * (i // group_size)  # Fluid particles are spread over a wider y-range
-    #                 (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * (i % row_size),  # Fluid particles are spread over a wider x-range
-    #                 (2.5 * dx) + (dx * particle_spacing_ratio) * (i // row_size)  # Fluid particles are spread over a wider y-range
-    #             ]
-    #         if ti.static(DIMENSIONS == 3):
-    #             row_size_x = i % row_size
-    #             row_size_y = ((i // row_size) % int(ti.floor(((max_water_depth_tsunami / (dx) - 3)* particles_per_dx)) ))
-    #             row_size_z = ((i // row_size) // int(ti.floor(((max_water_depth_tsunami / (dx) - 3)* particles_per_dx)) )) # will later add checks for init within the flume (i.e. dont init outside of it )
-    #             row_size_z = (i % row_size_y) // int(ti.floor((flume_width_3d / (dx * particle_spacing_ratio)) - 3))
-    #             row_size_z = int(ti.floor((flume_width_3d / (dx * particle_spacing_ratio)) - 3))
-    #             # xyz numpy to taichi
-    #             # x[i] = [xyz[None,0], xyz[None,1], xyz[None,2]]
-                
-    #             x[i] = [
-    #                 (piston_start_x * grid_length) + (dx * particle_spacing_ratio) * row_size_x,  # x-position
-    #                 (2.5 * dx) + (dx * particle_spacing_ratio) * row_size_y, # y-position
-    #                 (2.5 * dx) + (dx * particle_spacing_ratio) * row_size_z,  # z-position
-    #             ]
-    #         material[i] = 0  # fluid
-
-    #     else:
-
-    #         # Choose shape
-    #         shape = 0
-    #         id = i % (n_water_particles)
-    #         row_size = debris_row_size
-    #         block_size = row_size**2
-    #         debris_particle_x = ti.min(grid_length_x, (4*dx ) + (grid_length * (piston_start_x + piston_travel_x)) + (dx * particle_spacing_ratio) * ((id % row_size**2) % row_size) + grid_length * (16 * dx / grid_length) * (id // (row_size**2)))
-    #         if shape == 0:
-    #             if ti.static(DIMENSIONS == 2):
-    #                     debris_particle_y = ti.min(grid_length_y, (4*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
-    #                     x[i] = [
-    #                         debris_particle_x,  # Block particles are confined to a smaller x-range
-    #                         debris_particle_y   # Block particles are confined to a smaller y-range
-    #                     ]
-    #             elif ti.static(DIMENSIONS == 3):
-    #                 debris_particle_y = ti.min(max_water_depth_tsunami + ((2.5+1)*dx), ((2.5+1)*dx) + (max_water_depth_tsunami) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
-    #                 debris_particle_z = ti.min(flume_width_3d + (2.5*dx), (flume_width_3d / 2.0) + (2.5*dx) + (dx * (1 + particle_spacing_ratio * n_water_particles // basin_row_size)) + (dx * particle_spacing_ratio * ((id % row_size**2) // row_size)))
-    #                 x[i] = [
-    #                     debris_particle_x,  # Block particles are confined to a smaller x-range
-    #                     debris_particle_y,   # Block particles are confined to a smaller y-range
-    #                     debris_particle_z
-    #                 ]
-    #         material[i] = 1  # Fixed-Corotated Hyper-elastic debris (e.g. for simple plastic, metal, rubber)
      
 
 def save_metadata(file_path):
@@ -1333,7 +1269,8 @@ for frame in range(sequence_length):
 
 
     print(f'Piston Position x = {round(board_states[None][0],5)}')
-    print(f'Piston Velocity V_x = {round(board_velocity[None][0],5)}')
+    if round(board_velocity[None][0],5) >= .2:
+        print(f'Piston Velocity V_x = {round(board_velocity[None][0],5)}')
 
     
     #Change to tiachi fields probably
@@ -1352,7 +1289,9 @@ for frame in range(sequence_length):
             wave_numerical_soln[frame, 1] = x_np[max_wave_ind, 0] # Save x position of max water particle value
             wave_numerical_soln[frame, 2] = max_wave_y-max_base_y # Wave Amplitude
 
-            print(f"Wave Height: {wave_numerical_soln[frame, 2]} (m)")  
+            print(f"Expected Wave Height: {wave_height_expected}(m)")  
+            print(f"Sim Wave Height: {wave_numerical_soln[frame, 2]}(m)")
+
 
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     # print("TestHex: ", int('0x000000',0))

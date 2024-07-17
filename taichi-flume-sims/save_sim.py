@@ -138,7 +138,7 @@ def save_metadata(file_path, v_data, bounds, sequence_length, DIMENSIONS, time_d
 
     ** NOTE: GNS currently does not have use for variables "critical_time_step": dt or "dx": dx. **
        
-       Returns:
+    Returns:
         None
     """
     #Using a list for each time step for formatting

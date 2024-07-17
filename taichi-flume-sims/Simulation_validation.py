@@ -16,6 +16,7 @@ class SolitonWaveValidation:
             Args:
                 x: Horizontal position in the flume
                 t: Time step
+            Other Vars:
                 H: Wave height (Amplitude)
                 h: Water depth
                 c: Wave advective speed
@@ -25,7 +26,14 @@ class SolitonWaveValidation:
         return self.H * np.cosh( Ks * ( x - c * t ) ) ** -2 # Using np.cosh^-2 since cosh = 1/sech
 
     def free_surface(self, t, y_analytical, y_numerical):
-        # Plotting Surface Elevations from the Piston Soliton Wave in the Flumes body of water
+        """
+        Plot the surface elevations from the piston soliton wave in the flume's body of water.
+
+        Args:
+        t (array): Time points.
+        y_analytical (array): Analytical solution values at each time point.
+        y_numerical (array): Numerical solution values at each time point.
+        """
         plt.figure(figsize=(10, 6))
         plt.plot(t, y_numerical, label='Numerical Solution', linestyle='--', color = 'b')
         plt.plot(t, y_analytical, label='Analytical Solution', linewidth=2, color = 'r')
@@ -37,7 +45,14 @@ class SolitonWaveValidation:
         plt.show()
     
     def free_surface_error(self, t, y_analytical, y_numerical):
-        # Calculate and plot error
+        """
+        Calculate and plot the absolute error between numerical and analytical solutions.
+
+        Args:
+        t (array): Time points.
+        y_analytical (array): Analytical solution values at each time point.
+        y_numerical (array): Numerical solution values at each time point.
+        """
         error = np.abs(y_numerical - y_analytical)
         plt.figure(figsize=(10, 4))
         plt.plot(t, error, label='Absolute Error', color='g')
@@ -52,9 +67,8 @@ class SolitonWaveValidation:
         """
         Main Function for producing numeric vs analytic graphs
         """
-        y_analytical = np.zeros((len(wave_numerical_soln), 1)) # Allocate Memory for Analytical Soln
+        y_analytical = np.zeros_like(wave_numerical_soln) # Allocate Memory for Analytical Soln
 
-        # Need the initial max water particle position
         t = wave_numerical_soln[:, 0]
         x = wave_numerical_soln[:, 1]
         y_numerical = wave_numerical_soln[:, 2]
