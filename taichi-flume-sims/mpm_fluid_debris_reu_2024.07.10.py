@@ -13,6 +13,7 @@ import imageio
 import save_sim as ss
 import time as T
 from matplotlib import cm
+from Simulation_validation import SolitonWaveValidation
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
@@ -272,7 +273,6 @@ debris_offset = np.array([debris_field_downstream_edge - debris_field_dimensions
 xyz_debris = np.mgrid[(debris_offset[0] + particle_spacing/2):(debris_offset[0] + debris_dimensions[0] - particle_spacing/2):particle_spacing, (debris_offset[1] + particle_spacing/2):(debris_offset[1] + debris_dimensions[1] - particle_spacing/2):particle_spacing, (debris_offset[2] + particle_spacing/2):(debris_offset[2] + debris_dimensions[2] - particle_spacing/2):particle_spacing].reshape(3, -1).T 
 n_particles_debris = xyz_debris.shape[0]
 
-
 # Make an array to hold all the particle positions for the debris. It will make debris_array number of xyz_debris particle positions with the correct spacing
 xyz_debris_group = np.zeros((debris_array[0] * debris_array[1] * debris_array[2] * xyz_debris.shape[0], 3))
 for i in range(debris_array[0]):
@@ -292,14 +292,19 @@ print("Debris Group Offset: ", debris_offset)
 print("XYZ Debris Shape: ", xyz_debris.shape)
 print("XYZ Debris Group Shape: ", xyz_debris_group.shape)
 
+max_base_y = np.max(xyz_water[:, 1]) # Gets Baseline y value before wave
+
 # Combine the water and debris particle positions
 xyz = np.concatenate((xyz_water, xyz_debris_group), axis=0)
 
-if set_particle_count_style == "auto" or "automatic":
-    n_particles = xyz.shape[0]
-
+if DIMENSIONS == 3:
+    if set_particle_count_style == "auto" or "automatic":
+        n_particles = xyz.shape[0]
+else:
+    n_particles = 20000
 
 print("Total Number of Particles: ", n_particles)
+print(f"Max Initialized Water Particle Height: {max_base_y}")
 
 # xyz_numpy = np.zeros((n_particles, 3))
 # xyz_numpy[:xyz.shape[0], :] = xyz
@@ -314,8 +319,6 @@ downsampling = True
 downsampling_ratio = 1000 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
-
-print("Number of Particles: ", n_particles)
 # T.sleep(1)
 print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
 # T.sleep(1)
@@ -1076,7 +1079,6 @@ def save_metadata(file_path):
         json.dump(metadata, file)
         print("Metadata Saved!\n")
 
-    
 def save_simulation():
     """Save train.npz, test.npz,or valid.npz to file
     Args:
@@ -1252,11 +1254,15 @@ data_designation = str(input('What is the output particle data for? Select: Roll
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
+
 # Preallocate numpy arrays to store particle positions and velocities
-# x_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32) # float 32 for mac compatibility
-# v_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32)
-
-
+# NOTE: This can become many GBs large, exceeding the RAM of your computer. TODO: Use a file(s) on disk and perform writes in smaller chunks from the RAM
+x_data_gns= np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32) # float 32 for mac compatibility
+v_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32)
+wave_numerical_soln = np.zeros((sequence_length, 3), dtype=np.float32) # 1. time 2. corresponding x positional value 3. max y 
+max_wave_y = -np.inf # Initialize with unmistakable minamal value
+max_wave_ind = 0
+max_wave_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
 
 
 gui_res = min(1024, n_grid) # Set the resolution of the GUI
@@ -1331,11 +1337,22 @@ for frame in range(sequence_length):
 
     
     #Change to tiachi fields probably
+    x_np = x.to_numpy()
     data_to_save.append(x.to_numpy()) # Save particle positions for each substep
     v_data_to_save.append(v.to_numpy()) # Save particle velocities for each substep
-
     #x_data_gns[frame, :, :] = x.to_numpy() # Save particle positions for each substep
     #v_data_gns[frame, :, :] = v.to_numpy() # Save particle velocities for each substep
+
+    # Get max y for the wave
+    if time > piston_wait_time: # Start getting wave data after the initial wave has started
+        if x_np.size > 0: # Ensuring x has values
+            wave_numerical_soln[frame, 0] = time # time 
+            max_wave_ind = np.argmax(x_np[:, 1][max_wave_condition])  # Index of max wave value
+            max_wave_y = x_np[max_wave_ind, 1] # Max water particle Value for each time step based on boolean indexing
+            wave_numerical_soln[frame, 1] = x_np[max_wave_ind, 0] # Save x position of max water particle value
+            wave_numerical_soln[frame, 2] = max_wave_y-max_base_y # Wave Amplitude
+
+            print(f"Wave Height: {wave_numerical_soln[frame, 2]} (m)")  
 
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     # print("TestHex: ", int('0x000000',0))
@@ -1594,6 +1611,11 @@ if frame_paths:
     except Exception as e:
         print(f"Error creating GIF: {e}")
     
+
+# Validation of simulation data
+#wave_validator = SolitonWaveValidation(H=wave_height_expected, h = max_water_depth_tsunami)
+#wave_validator.validate_simulation(wave_numerical_soln)
+
 #Prep for GNS input
 save_simulation()
 
