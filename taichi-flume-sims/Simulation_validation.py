@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-g = -9.80665  # Gravitational acceleration
+g = 9.80665  # Gravitational acceleration taken to be positive downward
 
 class SolitonWaveValidation:
     def __init__(self, H, h):
@@ -21,7 +21,9 @@ class SolitonWaveValidation:
                 h: Water depth
                 c: Wave advective speed
         """
-        c = np.sqrt( g * ( self.h + self.H ) )  # Wave speed for shallow water
+        c = np.sqrt( g * ( self.H + self.h ) )   # Wave speed for shallow water
+        #c = np.sqrt( g * ( 1 + self.H / self.h ) )   # Wave speed for shallow water
+
         Ks = ( 1 / self.h ) * np.sqrt( ( 3 * self.H ) / ( 4 * self.h ) )
         return self.H * np.cosh( Ks * ( x - c * t ) ) ** -2 # Using np.cosh^-2 since cosh = 1/sech
 
@@ -72,7 +74,7 @@ class SolitonWaveValidation:
         t = wave_numerical_soln[:, 0]
         x = wave_numerical_soln[:, 1]
         y_numerical = wave_numerical_soln[:, 2]
-        y_analytical[:] = self.analytical_soliton(x, t) # Compute analytical along the flume in a column vector
+        y_analytical = self.analytical_soliton(x, t) # Compute analytical along the flume in a column vector
 
         self.free_surface(t, y_analytical, y_numerical) # Graph Free Surface values
         self.free_surface_error(t, y_analytical, y_numerical)
