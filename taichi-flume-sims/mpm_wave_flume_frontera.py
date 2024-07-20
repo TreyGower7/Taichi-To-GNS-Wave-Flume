@@ -16,7 +16,7 @@ from matplotlib import cm
 #from Simulation_validation import SolitonWaveValidation
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
-dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
+dim = 3
 system = platform.system().lower() # Useful for defining the sim environment
 
 use_antilocking = True # Use anti-locking for improved pressures
@@ -64,7 +64,7 @@ else:
 particles_per_dx = 4
 particles_per_cell = particles_per_dx ** DIMENSIONS
 print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
-particles_per_cell =float(input("Set the PPC, [Waiting for user input...] -->:"))
+particles_per_cell =float(64)
 # get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
 particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS)))
 
@@ -1125,9 +1125,9 @@ def save_simulation():
 
 # Simulation Prerequisites 
 data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
-fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
-sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps
-
+fps = 60
+sequence_length = 10 * fps
+gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
 # Preallocate numpy arrays to store particle positions and velocities
 max_wave_y = -np.inf
 max_wave_ind = 0
