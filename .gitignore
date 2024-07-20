@@ -1,8 +1,20 @@
+# Ignore specific simulation data files
 simulation_data_kwargs.npz
 unspecified_sim_data*.npz
+
+# Ignore user-specific configuration files
 imgui.ini
 .DS_Store
+
+# Ignore Python compiled files
 save_sim.cpython-39.pyc
-/Flume
+taichi-flume-sims/__pycache__/
 taichi-flume-sims/__pycache__/Simulation_validation.cpython-39.pyc
-./data_format_analysis
+
+# Ignore the entire Flume directory
+/Flume
+
+# Ignore data format analysis directory
+/data_format_analysis
+
+
