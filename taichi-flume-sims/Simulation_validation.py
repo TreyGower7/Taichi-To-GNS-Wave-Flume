@@ -94,10 +94,7 @@ class SolitonWaveValidation:
         t = wave_numerical_soln[:, 0]
         x = wave_numerical_soln[:, 1]
         y_numerical = wave_numerical_soln[:, 2]
-        # Format numerical data to match analytical
-        t_unique = np.unique(t)
-        x_unique = np.unique(x)
-        y_numerical = wave_numerical_soln[:, 2].reshape(len(t_unique), len(x_unique)).T
+
         # Generate time and space points
         ta = np.linspace(0, 10, 10)  # Time points (s)
         xa = np.linspace(0, 90, 1000)  # Spatial points (m)
@@ -105,7 +102,7 @@ class SolitonWaveValidation:
 
        
         self.plot_free_surface(xa, ta, y_analytical, "Analytical") # Graph Free Surface values
-        self.plot_free_surface(x, t, y_numerical, "Numerical") # Graph Free Surface values
+        #self.plot_free_surface(x, t, y_numerical, "Numerical") # Graph Free Surface values
 
         self.free_surface_error(t, y_analytical, y_numerical)
 
