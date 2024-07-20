@@ -64,7 +64,7 @@ else:
 particles_per_dx = 4
 particles_per_cell = particles_per_dx ** DIMENSIONS
 print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
-particles_per_cell =float(64)
+particles_per_cell =float(8)
 # get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
 particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS)))
 
@@ -316,7 +316,7 @@ print(f"Max Initialized Water Particle Height: {max_base_y}")
 # n_particles_water = (flume_height_3d, flume_height_3d, flume_width_3d, flume_length_3d)
 
 downsampling = True
-downsampling_ratio = 1000 # Downsamples by 100x
+downsampling_ratio = 100 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
 print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
@@ -1067,7 +1067,7 @@ def save_simulation():
     # Perform downsampling for GNS
     if downsampling:
         downsampled_mat_data = mat_data[::downsampling_ratio]
-        downsampled_data = pos_data[:,::downsampling_ratio,:]
+        downsampled_data = pos_data[::downsampling_ratio,::downsampling_ratio,::downsampling_ratio]
 
 
     #check version of numpy >= 1.22.0
