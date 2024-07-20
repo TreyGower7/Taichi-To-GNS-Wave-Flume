@@ -21,4 +21,4 @@ python3 -m pip list
 mkdir taichi-output
 mkdir taichi-output/frames
 
-python3 mpm_frontera.py
+python3 mpm_wave_flume_frontera.py
