@@ -316,7 +316,7 @@ print(f"Max Initialized Water Particle Height: {max_base_y}")
 # n_particles_water = (flume_height_3d, flume_height_3d, flume_width_3d, flume_length_3d)
 
 downsampling = True
-downsampling_ratio = 10 # Downsamples by 100x
+downsampling_ratio = 1000 # Downsamples by 100x
 # n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
 
 print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
