@@ -7,9 +7,7 @@ imgui.ini
 .DS_Store
 
 # Ignore Python compiled files
-save_sim.cpython-39.pyc
-taichi-flume-sims/__pycache__/
-taichi-flume-sims/__pycache__/Simulation_validation.cpython-39.pyc
+taichi_flume_sims/__pycache__
 
 # Ignore the entire Flume directory
 /Flume
