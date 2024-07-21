@@ -151,7 +151,7 @@ if experiment == "breaking" and (paper == "Mascarenas 2022" or paper == "Bonus 2
     max_water_depth_tsunami = 1.85 # SWL from Mascardenas 2022 for breaking wave, and for Shekhar et al 2020 I believe
     wave_height_expected = 1.3 # Expected wave height for the breaking wave in meters
     wave_length_expected = 2*3.14159265359 # Expected wave length for the breaking wave in meters
-    time_shift_piston = 2.5 # Time shift for the piston motion's error-function, experiments used ~10 seconds to ensure a smooth start to the wave
+    time_shift_piston = 1.0 # Time shift for the piston motion's error-function, experiments used ~10 seconds to ensure a smooth start to the wave
 
 elif experiment == "unbreaking" and (paper == "Mascarenas 2022" or paper == "Bonus 2023"):
     piston_amplitude = 3.9 # 4 meters max range on piston's stroke in the OSU LWF
@@ -944,6 +944,7 @@ def save_metadata(file_path):
     """
     #Using a list for each time step for formatting
     global v_data_to_save
+    global bounds
     vel = np.stack(v_data_to_save,axis=0) / grid_length # Scale velocity data to 1x1x1 domain for GNS
     vel_diff = np.diff(vel, axis=0) #computing acceleration along the time dependant axis
     
@@ -967,6 +968,8 @@ def save_metadata(file_path):
     
     # Assume scaled already
     bounds_metadata = []
+    bounds_i = []
+    bounds_temp = []
     for i in range(DIMENSIONS):
         bounds_i = [float(bound_ii) for bound_ii in bounds[i]]
         bounds_metadata.append(bounds_i)
@@ -991,7 +994,7 @@ def save_metadata(file_path):
             bounds_metadata[i][0] = float(bounds_metadata[i][1])
             bounds = bounds_temp
             
-        print("bounds for metadata to GNS: ", bounds_metadata)
+    print("bounds for metadata to GNS: ", bounds_metadata)
     
     # Formatting enforced
     metadata = {
@@ -1071,7 +1074,8 @@ def save_simulation():
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
     # Should add a check for the python version as well
     
-    if (np.version.version >= '1.23.5'):
+    # This Doesnt work with GNS
+    if (np.version.version > '1.23.5'):
         print("Using numpy version (>= 1.23.5), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
         pos_data = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
         mat_data = np.asarray(downsampled_mat_data, dtype=object)
@@ -1193,13 +1197,14 @@ sequence_length = int(input('How many seconds to run this simulations? [Waiting 
 
 # Preallocate numpy arrays to store particle positions and velocities
 # NOTE: This can become many GBs large, exceeding the RAM of your computer. TODO: Use a file(s) on disk and perform writes in smaller chunks from the RAM
-x_data_gns= np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32) # float 32 for mac compatibility
-v_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32)
-wave_numerical_soln = np.zeros((sequence_length, 3), dtype=np.float32) # 1. time 2. corresponding x positional value 3. max y 
 max_wave_y = -np.inf # Initialize with unmistakable minamal value
 max_wave_ind = 0
-max_wave_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
-
+wave_water_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
+#wave_base_test = -np.inf
+wave_formed = False
+wave_height = 0
+formed_wave_frames = 0
+time_formed = 0.0  # Reset time once wave is fully formed
 
 gui_res = min(1024, n_grid) # Set the resolution of the GUI
 gui_res_base = 1024
@@ -1264,35 +1269,63 @@ for frame in range(sequence_length):
         substep()
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
 
+    print("\n" + "=" * 30)
+    print("     Simulation Details     ")
+    print("=" * 30)
+    if wave_height_expected - 0.3 <= wave_height <= wave_height_expected + 0.1:
+        print(f"Frame: {frame}, Saving Frame: {formed_wave_frames}")
+        print(f"Time: {time:.3f}, Time of formed wave: {time_formed:.3f}")
+    else:
+        print(f"Frame: {frame}")
+        print(f"Time: {time:.3f}")
 
-    print(f't = {round(time,3)}')
+    print("-" * 30)
 
+    print("=" * 30)
+    print("  Simulation Particle Data  ")
+    print("=" * 30)
 
-    print(f'Piston Position x = {round(board_states[None][0],5)}')
-    if round(board_velocity[None][0],5) >= .2:
-        print(f'Piston Velocity V_x = {round(board_velocity[None][0],5)}')
-
+    if board_states[None][0] < 3.5:  # max piston draw is 3.9m
+        print(f"Piston Position x = {board_states[None][0]:.5f}")
+        if board_velocity[None][0] >= 0.2:
+            print(f"Piston Velocity V_x = {board_velocity[None][0]:.5f}")
     
     #Change to tiachi fields probably
     x_np = x.to_numpy()
     data_to_save.append(x.to_numpy()) # Save particle positions for each substep
     v_data_to_save.append(v.to_numpy()) # Save particle velocities for each substep
-    #x_data_gns[frame, :, :] = x.to_numpy() # Save particle positions for each substep
-    #v_data_gns[frame, :, :] = v.to_numpy() # Save particle velocities for each substep
-
+    
     # Get max y for the wave
-    if time > piston_wait_time: # Start getting wave data after the initial wave has started
-        if x_np.size > 0: # Ensuring x has values
-            wave_numerical_soln[frame, 0] = time # time 
-            max_wave_ind = np.argmax(x_np[:, 1][max_wave_condition])  # Index of max wave value
-            max_wave_y = x_np[max_wave_ind, 1] # Max water particle Value for each time step based on boolean indexing
-            wave_numerical_soln[frame, 1] = x_np[max_wave_ind, 0] # Save x position of max water particle value
-            wave_numerical_soln[frame, 2] = max_wave_y-max_base_y # Wave Amplitude
+    if time > piston_wait_time:  # Start getting wave data after the initial wave has started
+        if x_np.size > 0:  # Ensuring x has values
+            max_wave_ind = np.argmax(x_np[:, 1][wave_water_condition])  # Index of max wave value
+            max_wave_y = x_np[max_wave_ind, 1]  # Max water particle Value for each time step based on boolean indexing
+            wave_height = max_wave_y - max_base_y
 
-            print(f"Expected Wave Height: {wave_height_expected}(m)")  
-            print(f"Sim Wave Height: {wave_numerical_soln[frame, 2]}(m)")
+            print(f"\nCurrent Wave Height: {wave_height:.3f}(m)")
+            print(f"Expected Wave Height: {wave_height_expected:.3f}(m)")
 
+            if wave_height_expected - 0.3 <= wave_height <= wave_height_expected + 0.1:
+                if not wave_formed:
+                    wave_formed = True
+                    wave_numerical_soln = np.zeros((abs(sequence_length-frame), 3), dtype=np.float32)
+                    print("\n" + "*" * 30)
+                    print("Wave is fully formed.")
+                    print("Starting to save wave data.")
+                    print("*" * 30)
 
+                if wave_formed:
+                    time_formed += dt
+                    wave_numerical_soln[formed_wave_frames, 0] = time_formed  # Time 
+                    wave_numerical_soln[formed_wave_frames, 1] = x_np[max_wave_ind, 0]  # Save x position of max water particle value
+                    wave_numerical_soln[formed_wave_frames, 2] = wave_height  # Wave Amplitude
+                    formed_wave_frames += 1
+                print("\n...Saving Wave Data...")
+
+            else:
+                print("\nWave height not within expected range.")
+
+    print("\n" + "=" * 30)  
     clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
     # print("TestHex: ", int('0x000000',0))
     # print(cm.plasma(x.to_numpy()[:, 1] / flume_height_3d)[:,:3].max())
@@ -1552,11 +1585,20 @@ if frame_paths:
     
 
 # Validation of simulation data
-#wave_validator = SolitonWaveValidation(H=wave_height_expected, h = max_water_depth_tsunami)
-#wave_validator.validate_simulation(wave_numerical_soln)
+
+# TODO: Keep wave formed, wave time saving, and saving_frme in the main loop.
+
+# TODO: Delete data_to_save and v_data_to_save 
+# TODO: Save it all to either taichi or csv file
+# TODO: Save Max water particle values to wave_numerical_soln = np.zeros((abs(formed_wave_frames), 3), dtype=np.float32)
 
 #Prep for GNS input
 save_simulation()
+
+wave_validator = SolitonWaveValidation(H=wave_height_expected, h = max_water_depth_tsunami)
+wave_validator.validate_simulation(wave_numerical_soln)
+
+
 
 #if using save_sim.py script
 #ss.save_sim_data(data_designation, data_to_save, v_data_to_save, material, 

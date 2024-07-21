@@ -1,6 +1,5 @@
 simulation_data_kwargs.npz
-unspecified_sim_data.npz
-unspecified_sim_data2.npz
+unspecified_sim_data*.npz
 imgui.ini
 .DS_Store
 save_sim.cpython-39.pyc
