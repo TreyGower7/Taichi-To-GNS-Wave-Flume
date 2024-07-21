@@ -1177,7 +1177,9 @@ for frame in range(sequence_length):
             max_wave_ind = np.argmax(x_np[:, 1][wave_water_condition])
             max_wave_y = x_np[max_wave_ind, 1]
             wave_height = max_wave_y - max_base_y
-
+            if wave_height == np.nan:
+                break # The sim is overflowing memory on tacc
+            
             print(f"\nCurrent Wave Height: {wave_height:.3f}(m)")
             print(f"Expected Wave Height: {wave_height_expected:.3f}(m)")
 
