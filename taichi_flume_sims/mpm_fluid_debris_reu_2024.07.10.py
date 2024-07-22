@@ -1445,7 +1445,7 @@ for frame in range(sequence_length):
 
     if board_states[None][0] < piston_wait_time:  # max piston draw is 3.9m
         print(f"Piston Position x = {board_states[None][0]:.5f}")
-        if board_velocity[None][0] >= 0.2: # Why 0.2?
+        if board_velocity[None][0] >= 0.2: # .2 as an arbitrary velocity (10ish percent) to start displaying Piston Velocity
             print(f"Piston Velocity V_x = {board_velocity[None][0]:.5f}")
     
     x_np = x.to_numpy()
