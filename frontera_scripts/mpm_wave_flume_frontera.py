@@ -1136,7 +1136,7 @@ wave_formed = False
 wave_height = 0
 formed_wave_frames = 0
 time_formed = 0.0
-
+overflow_error =  False
 # Saving Figures of the simulation
 
 reset() 
@@ -1178,8 +1178,10 @@ for frame in range(sequence_length):
             max_wave_y = x_np[max_wave_ind, 1]
             wave_height = max_wave_y - max_base_y
             if wave_height == np.nan:
+                overflow_error = True
+                del x, xyz, xyz_debris, xyz_debris_group, bathymetry_joints_taichi_x, v, C, F
                 break # The sim is overflowing memory on tacc
-            
+                
             print(f"\nCurrent Wave Height: {wave_height:.3f}(m)")
             print(f"Expected Wave Height: {wave_height_expected:.3f}(m)")
 
@@ -1207,7 +1209,8 @@ for frame in range(sequence_length):
     
 
 #Prep for GNS input
-save_simulation()
+if not overflow_error:
+    save_simulation()
 
 #wave_validator = SolitonWaveValidation(H=wave_height_expected, h = max_water_depth_tsunami)
 #wave_validator.validate_simulation(wave_numerical_soln)
