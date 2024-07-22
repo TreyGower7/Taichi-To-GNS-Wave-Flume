@@ -1,15 +1,22 @@
 #!/bin/bash
 
-# Create virtual environment with dependencies (if you dont have it)
-#TMP_DIR="../"
+TMP_DIR="./"
+VENV_PATH="${TMP_DIR}/venv"
+# Check if virtual environment exists
+if [ ! -d "${VENV_PATH}" ]; then
+  echo "Virtual environment does not exist; Running build_venv_frontera.sh"
+  
+  # Run the script to build the virtual environment
+  if [ -f "./build_venv_frontera.sh" ]; then
+    ./build_venv_frontera.sh
+  else
+    echo "build_venv_frontera.sh not found; Please ensure it is present in the current directory"
+    exit 1
+  fi
+fi
 
-#virtualenv --python=python3.6 "${TMP_DIR}/gns/venv"
-#source "${TMP_DIR}/gns/venv/bin/activate"
-
-# Install dependencies.
-#pip install --upgrade -r requirements.txt
-# Check if the directory gns-flume exists
-
+# Activate the virtual environment
+source "${VENV_PATH}/bin/activate"
 
 if [ -d "gns-flume" ]; then
   echo "Directory gns-flume exists; Using that parent directory"
