@@ -14,3 +14,5 @@ toml
 partio
 pandas
 pytest
+pyevtk
+point_cloud_utils
