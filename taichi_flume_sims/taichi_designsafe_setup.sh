@@ -7,6 +7,14 @@ python3 -m pip install imageio
 python3 -m pip install ffmpeg
 python3 -m pip install -r requirements.txt
 
+# Check if numpy is installed and its version specific for the wave flume simulation
+NUMPY_VERSION=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null)
+
+if [ "$NUMPY_VERSION" != "1.23.5" ]; then
+    python3 -m pip uninstall -y numpy
+    python3 -m pip install numpy==1.23.5
+fi
+
 python3 -m pip list
 # Assuming that mpm99_designsafe.py is in the same directory as this script
 mkdir taichi-output
