@@ -10,12 +10,12 @@ import os
 import json
 import math
 import imageio
-import save_sim as ss
 import time as T
 from matplotlib import cm
-from Simulation_validation import SolitonWaveValidation
 from pyevtk.hl import pointsToVTK
 import point_cloud_utils as pcu
+# import save_sim as ss # Using the save_simulation() function present in current file instead 
+from Simulation_validation import SolitonWaveValidation
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 # ------------------------ Output Style ------------------------
@@ -1425,7 +1425,8 @@ for frame in range(sequence_length):
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
 
 
-    gui
+    # 30 is a magic number, make it a parameter
+    
     print("\n" + "=" * 30)
     print("     Simulation Details     ")
     print("=" * 30)
@@ -1444,10 +1445,9 @@ for frame in range(sequence_length):
 
     if board_states[None][0] < piston_wait_time:  # max piston draw is 3.9m
         print(f"Piston Position x = {board_states[None][0]:.5f}")
-        if board_velocity[None][0] >= 0.2:
+        if board_velocity[None][0] >= 0.2: # Why 0.2?
             print(f"Piston Velocity V_x = {board_velocity[None][0]:.5f}")
     
-    #Change to tiachi fields probably
     x_np = x.to_numpy()
     data_to_save.append(x.to_numpy()) # Save particle positions for each substep
     v_data_to_save.append(v.to_numpy()) # Save particle velocities for each substep
