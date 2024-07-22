@@ -1,0 +1,16 @@
+numpy==1.21.1
+matplotlib
+taichi
+imageio
+ffmpeg
+pyevtk
+point_cloud_utils
+ply
+plyfile
+stl
+scipy
+pyvista
+toml
+partio
+pandas
+pytest

@@ -14,94 +14,143 @@ import save_sim as ss
 import time as T
 from matplotlib import cm
 from Simulation_validation import SolitonWaveValidation
-
+from pyevtk.hl import pointsToVTK
+import point_cloud_utils as pcu
 ti.init(arch=ti.gpu)  # Try to run on GPU
+
+# ------------------------ Output Style ------------------------
+# Output configuration for GUI and simulation files
+use_vulkan_gui = False # Needed for Windows WSL currently, and any non-vulkan systems - Turn on if you want to use the faster new GUI renderer
+output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
+output_png = True # Outputs png files and makes a gif out of them
+
+# output_particles_as_ply = True # Outputs particles at individual frames as ply files
+# output_particles_as_bgeo = True # Outputs particles at individual frames as xyz files
+# output_particles_as_npy = True # Outputs particles at individual frames as npy files
+output_particles_as_npz = True # Outputs particles at all frames as a single npz file at the end of the simulation
+output_particles_as_vtk = True # Outputs particles at individual frames as vtk files
+output_particles_as_filetype = ["npz", "vtk"]
+support_output_particle_filetypes = ["npz", "vtk"] # "ply", "bgeo", "npy", "npz", "vtk"
+if not any([x in support_output_particle_filetypes for x in output_particles_as_filetype]):
+    raise ValueError("Invalid output particle filetype selected. Please select from: ", support_output_particle_filetypes)
+
+print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else " disabled", " enabled" if output_png else " disabled"))
+
+# ------------------------ Simulation Domain Setup ------------------------
 dim = input("What Simulation Dimensionality? Select: 2D or 3D [Waiting for user input...] --> ").lower().strip()
+if (dim == '2d' or int(dim) == 2):
+    DIMENSIONS = 2
+    print("2D Simulation Selected")
+elif (dim == '3d' or int(dim) == 3):
+    DIMENSIONS = 3
+    print("3D Simulation Selected")
+else:
+    raise ValueError("Invalid dimensionality selected. Please select 2D or 3D.")
+
+# Configure simulation resolution and memory allocation
 system = platform.system().lower() # Useful for defining the sim environment
+on_weak_pc = True # Set to True if running on a weak PC, False if running on a strong PC (lots of GPU memory good speed)
+preallocate_memory_style = "manual"
 
-use_antilocking = True # Use anti-locking for improved pressures
-JB_fluid_ratio = 0.5 # Amount of antilocking, [0,1]. Recc < 0.9, < 0.99, < 0.999 for bulk of ~2e7, ~2e8, and ~2e9
+n_grid = 1024 # Default number of grid nodes in a direction
+particles_per_dx = 4 # Default number of particles per dx, e.g. 4 -> 4^d = 16 or 64 particles per cell in 2d and 4d
+particles_per_cell = particles_per_dx ** DIMENSIONS
+print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
+particles_per_cell =float(input("Set the PPC, [Waiting for user input...] -->:"))
+particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS))) # get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
+
+if preallocate_memory_style == "bits":
+    # More bits = higher resolution, more accurate simulation, but slower and more memory usage
+    quality = 6 # Resolution multiplier that affects both particles and grid nodes by multiplying their base units w.r.t. dimensions
+    particle_quality_bits = 13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
+    grid_quality_bits = 7 # Bits for grid nodes base unit in a direction, e.g. 7 = 2^7 = 128 grid nodes in a direction
+
+    n_grid_base = 2 ** grid_quality_bits # Using pow-2 grid-size for improved GPU mem usage / performance 
+    n_grid = n_grid_base * quality
+
+
+if preallocate_memory_style == "manual":
+    # check OS to see if its ubuntu
+    n_grid = 1024 # For 102.4 m domain, 102.4 / n_grid cm grid spacing 
+    if (system != 'linux' and system != 'linux2') and on_weak_pc:
+        n_grid = min(512, n_grid) # For weak PCs, decrease the grid size to 512 to save memory
+
+
+buffer_cells = 3  # Number of buffer cells to add around sides of the simulation domain
+
+# ------------------------ Algorithm Setup ------------------------
+# Set shape-function kernel's order for MPM algorithm
 bspline_kernel_order = 2 # Quadratic BSpline kernel
+supported_bspline_orders = [2] # Quadratic, Cubic, Quartic BSpline kernels
+if bspline_kernel_order not in supported_bspline_orders:
+    raise ValueError("Invalid BSpline kernel order selected. Please select from: ", supported_bspline_orders)
 
+# Configure volumetric antilocking for MPM pressure projection, improves pressure accuracy (i.e. smooth pressure field)
+use_antilocking = True # Use anti-locking for improved pressures
+JB_fluid_ratio = 0.95 # Amount of antilocking, [0,1]. Recc < 0.9, < 0.99, < 0.999 for bulk of ~2e7, ~2e8, and ~2e9
+if JB_fluid_ratio > 1.0 or JB_fluid_ratio < 0.0:
+    raise ValueError("Invalid mixing ratio selected for F-Bar vol. antilocking pressure smoothing: [", JB_fluid_ratio, "]. Please select from: [0,1].")
+
+
+# ------------------------ Flume Setup ------------------------
 flume_shorten_ratio = 1.0 # Halve the flume length for testing purposes
 flume_thin_ratio = 0.0625 / 4
-on_weak_pc = True
 if (system != 'linux' and system != 'linux2') and on_weak_pc:
-    flume_shorten_ratio = 0.5 # Halve the flume length for testing purposes
+    flume_shorten_ratio = 1.0 # Halve the flume length for testing purposes
     weak_pc_max_flume_width_ratio = 0.125
     flume_thin_ratio = min(weak_pc_max_flume_width_ratio, flume_thin_ratio)
     print("Running on a weak PC, reducing width by ratio of: ", flume_thin_ratio)
-
-buffer_cells = 3  # Number of buffer cells to add around sides of the simulation domain
-grid_length = 102.4 * flume_shorten_ratio  # Max length of the simulation domain in any direction [meters]
+if flume_shorten_ratio > 1.0 or flume_shorten_ratio < 0.0:
+    raise ValueError("Invalid flume length ratio selected. Please select from: [0,1].")
+if flume_thin_ratio > 1.0 or flume_thin_ratio < 0.0:
+    raise ValueError("Invalid flume width ratio selected. Please select from: [0,1].")
 
 if dim == '3d' or int(dim) == 3:
     DIMENSIONS = 3
     # Wave Flume Render 3d using grid_length as the flume length in 2D & 3D
     # https://engineering.oregonstate.edu/wave-lab/facilities/large-wave-flume
-    flume_length_3d = 90 * flume_shorten_ratio # meters
-    flume_height_3d = 4.6 # meters
-    flume_width_3d = 3.6 * flume_thin_ratio # meters
+    flume_length = 90 * flume_shorten_ratio # meters
+    flume_height = 4.6 # meters
+    flume_width = 3.6 * flume_thin_ratio # meters
 
-    
-    # Max_water_depth_wind_storm = 2.7 # meters
-    # Define Taichi fields for flume geometry
-    flume_vertices = ti.Vector.field(3, dtype=float, shape=8)
-    bottom = ti.field(dtype=int, shape=6)  # Change to a 1D array
-    # Only way to render flume with differing colors
-    backwall = ti.field(dtype=int, shape=6)
-    frontwall = ti.field(dtype=int, shape=6)
-    sidewalls = ti.field(dtype=int, shape=6)
-
-    front_back_color = (166/255, 126/255, 71/255)  # Rust color in RGB
-    side_color = (197/255, 198/255, 199/255)  # Light grey color in RGB
-    bottom_color = (79/255, 78/255, 78/255)
-    background_color = (237/255, 235/255, 235/255)
 else:
     DIMENSIONS = 2
+    # Wave Flume Render 3d using grid_length as the flume length in 2D & 3D
+    # https://engineering.oregonstate.edu/wave-lab/facilities/large-wave-flume
+    flume_length = 90 * flume_shorten_ratio # meters
+    flume_height = 4.6 # meters
+    flume_width = 0.0 # meters
+    
+# Max_water_depth_wind_storm = 2.7 # meters
+# Define Taichi fields for flume geometry
+flume_vertices = ti.Vector.field(3, dtype=float, shape=8)
+bottom = ti.field(dtype=int, shape=6)  # Change to a 1D array
+# Only way to render flume with differing colors
+backwall = ti.field(dtype=int, shape=6)
+frontwall = ti.field(dtype=int, shape=6)
+sidewalls = ti.field(dtype=int, shape=6)
+
+front_back_color = (166/255, 126/255, 71/255)  # Rust color in RGB
+side_color = (197/255, 198/255, 199/255)  # Light grey color in RGB
+bottom_color = (79/255, 78/255, 78/255)
+background_color = (237/255, 235/255, 235/255)
 
 
-particles_per_dx = 4
-particles_per_cell = particles_per_dx ** DIMENSIONS
-print("NOTE: Common initial Particles-per-Cell, (PPC), are {}, {}, {}, or {}.".format(1**DIMENSIONS, 2**DIMENSIONS, 3**DIMENSIONS, 4**DIMENSIONS))
-particles_per_cell =float(input("Set the PPC, [Waiting for user input...] -->:"))
-# get the inverse power of the particles per cell to get the particles per dx, rounded to the nearest integer
-particles_per_dx = int(round(particles_per_cell ** (1 / DIMENSIONS)))
 
-use_vulkan_gui = False # Needed for Windows WSL currently, and any non-vulkan systems - Turn on if you want to use the faster new GUI renderer
-output_gui = True # Output to GUI window (original, not GGUI which requires vulkan for GPU render)
-output_png = True # Outputs png files and makes a gif out of them
-print("Output frames to GUI window{}, and PNG files{}".format(" enabled" if output_gui else " disabled", " enabled" if output_png else " disabled"))
-
-# More bits = higher resolution, more accurate simulation, but slower and more memory usage
-particle_quality_bits = 13 # Bits for particle count base unit, e.g. 13 = 2^13 = 8192 particles
-grid_quality_bits = 7 # Bits for grid nodes base unit in a direction, e.g. 7 = 2^7 = 128 grid nodes in a direction
-quality = 6 # Resolution multiplier that affects both particles and grid nodes by multiplying their base units w.r.t. dimensions
-
-#Using a shorter length means that grid_ratio_y and z may need to increase to be closer to 1 since the domain becomes more like a cube as opposed to a long flume. May be better to work with the full length for now
- 
- 
-# While we are working on getting 3D working, lets reduce the flume width (z) from 3.7 to 0.5 to avoid memory limits
-# 3d sims get big very fast
-
-
-n_grid_base = 2 ** grid_quality_bits # Using pow-2 grid-size for improved GPU mem usage / performance 
-n_grid = n_grid_base * quality
-
-# check OS to see if its ubuntu
-n_grid = 2048 # For 102.4 m domain, 102.4 / n_grid cm grid spacing 
-if (system != 'linux' and system != 'linux2') and on_weak_pc:
-    n_grid = min(512, n_grid) # For weak PCs, decrease the grid size to 512 for better performance
-
+# Define the longest scale of the simulation domain
+grid_length = 102.4 * flume_shorten_ratio  # Max length of the simulation domain in any direction [meters]
 dx, inv_dx = float(grid_length / n_grid), float(n_grid / grid_length)
 
+# ------------------------ Simulation Resolution Setup ------------------------
+# Define the grid ratios for each dimension
+#Using a shorter length means that grid_ratio_y and z may need to increase to be closer to 1 since the domain becomes more like a cube as opposed to a long flume. May be better to work with the full length for now
 # Best to use powers of 2 for mem allocation, e.g. 0.5, 0.25, 0.125, etc. 
 # Note: there are buffer grid-cells on either end of each dimension for multi-cell shape-function kernels and BCs
 grid_ratio_x = 1.0000
 grid_ratio_y = 0.25
 grid_ratio_z = 0.125
-# grid_ratio_y = (2**(math.ceil((flume_height_3d / grid_length) * n_grid) - 1).bit_length()) / n_grid
-# grid_ratio_z = (2**(math.ceil((flume_width_3d / grid_length) * n_grid) - 1).bit_length()) / n_grid
+# grid_ratio_y = (2**(math.ceil((flume_height / grid_length) * n_grid) - 1).bit_length()) / n_grid
+# grid_ratio_z = (2**(math.ceil((flume_width / grid_length) * n_grid) - 1).bit_length()) / n_grid
 print("Grid Ratios: ", grid_ratio_x, grid_ratio_y, grid_ratio_z)
 grid_length_x = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_x))
 grid_length_y = grid_length * ti.max(0.0, ti.min(1.0, grid_ratio_y))
@@ -139,19 +188,19 @@ elif (set_particle_count_style == "compiled" or set_particle_count_style == "def
     n_particles = n_particles_default
 
 
-
+# ------------------------ Piston / Moving-Boundary Setup ------------------------
 # Piston Physics
 paper = "Bonus 2023"
 experiment = "breaking"
 
 if experiment == "breaking" and (paper == "Mascarenas 2022" or paper == "Bonus 2023"):
-    piston_amplitude = 3.6 # 
+    piston_amplitude = 3.6 # 4 meters max range on piston's stroke in the OSU LWF
     piston_scale_factor = 1.0 # Standard deviation scaling of the piston motion's error-function
     piston_period = piston_scale_factor*3.14159265359 * 2# Period of the piston's motion [s]
     max_water_depth_tsunami = 1.85 # SWL from Mascardenas 2022 for breaking wave, and for Shekhar et al 2020 I believe
     wave_height_expected = 1.3 # Expected wave height for the breaking wave in meters
     wave_length_expected = 2*3.14159265359 # Expected wave length for the breaking wave in meters
-    time_shift_piston = 1.0 # Time shift for the piston motion's error-function, experiments used ~10 seconds to ensure a smooth start to the wave
+    time_shift_piston = 2.5 # Time shift for the piston motion's error-function, experiments used ~10 seconds to ensure a smooth start to the wave
 
 elif experiment == "unbreaking" and (paper == "Mascarenas 2022" or paper == "Bonus 2023"):
     piston_amplitude = 3.9 # 4 meters max range on piston's stroke in the OSU LWF
@@ -184,7 +233,7 @@ piston_travel_x = piston_amplitude / grid_length
 piston_wait_time = 0.0 # don't immediately start the piston, let things settle with gravity first
 
 
-
+# ------------------------ Bathymetry Setup ------------------------
 # Bathymetry ramp setup for the flume, remove particles under ramps to save memory
 use_bathymetry_ramps = True
 bathymetry_style = "linear"
@@ -192,7 +241,7 @@ piston_neutral_x = -2.0 # Neutral position of the piston from experiment coordin
 bathymetry_joints_x = []
 bathymetry_joints_x.append(0.0)
 bathymetry_joints_x.append(14.275 - piston_neutral_x)
-bathymetry_joints_x.append(17.9 - piston_neutral_x) # 17.933
+bathymetry_joints_x.append(17.933 - piston_neutral_x) # 17.933
 # bathymetry_joints_x.append(17.933 - piston_neutral_x)
 bathymetry_joints_x.append(28.906 - piston_neutral_x)
 bathymetry_joints_x.append(43.536 - piston_neutral_x)
@@ -230,8 +279,9 @@ bathymetry_joints_taichi_x[None] = bathymetry_joints_x
 bathymetry_joints_taichi_y[None] = bathymetry_joints_y
 
 
+# ------------------------ Particle Setup ------------------------
 buffer_shift_particles = -1.5 # How many cells to shift the particles to account for position of the actual buffer nodes 
-xyz_water = np.mgrid[(piston_pos[0] + buffer_shift_particles*dx + particle_spacing/2):(flume_length_3d + buffer_cells*dx + buffer_shift_particles*dx - particle_spacing/2):particle_spacing, (buffer_cells*dx + buffer_shift_particles*dx + particle_spacing/2):(max_water_depth_tsunami + buffer_cells*dx + buffer_shift_particles*dx - particle_spacing/2):particle_spacing,  (buffer_cells*dx + buffer_shift_particles*dx + particle_spacing/2):(flume_width_3d + buffer_cells*dx + buffer_shift_particles*dx - particle_spacing/2):particle_spacing].reshape(3, -1).T
+xyz_water = np.mgrid[(piston_pos[0] + buffer_shift_particles*dx + particle_spacing/2):(flume_length + buffer_cells*dx + buffer_shift_particles*dx - particle_spacing/2):particle_spacing, (buffer_cells*dx + buffer_shift_particles*dx + particle_spacing/2):(max_water_depth_tsunami + buffer_cells*dx + buffer_shift_particles*dx - particle_spacing/2):particle_spacing,  (buffer_cells*dx + buffer_shift_particles*dx + particle_spacing/2):(flume_width + buffer_cells*dx + buffer_shift_particles*dx - particle_spacing/2):particle_spacing].reshape(3, -1).T
 
 # Check if the water particles are under the bathymetry ramps
 water_below_bathymetry_mask = np.zeros(xyz_water.shape[0], dtype=bool)
@@ -257,17 +307,41 @@ if use_bathymetry_ramps:
     xyz_water = xyz_water[~water_below_bathymetry_mask]
     print("Water Particles Below Bathymetry Removed: ", water_below_bathymetry_mask.sum())
 
+
+xyz_water = xyz_water[np.lexsort((xyz_water[:,2], xyz_water[:,1], xyz_water[:,0]))]   
+
+# Downsample a point cloud so that all the points are separated by approximately a fixed value
+# i.e. the downsampled points follow a blue noise distribution
+# idx is an array of integer indices into v indicating which samples to keep
+downsampling = True
+downsampling_ratio = 100 # Downsamples by 100x
+print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
+
+xyz_water_sampled = None
+xyz_debris_sampled = None
+idx_water_sampled = None
+idx_debris_sampled = None
+xyz_sampled = None
+idx_sampled = None
+
+if downsampling:
+    downsampling_radius_water = float((downsampling_ratio)**(1/DIMENSIONS) * particle_spacing)
+    idx_water_sampled = pcu.downsample_point_cloud_poisson_disk(xyz_water, downsampling_radius_water)
+    xyz_water_sampled = xyz_water[idx_water_sampled] # Use the indices to get the sample positions 
+    # n_water_sampled = n[idx] # Use the indices to get the sample  normals
+    print("Downsampled Water Particles: ", xyz_water_sampled.shape[0], " , Original Water Particles: ", xyz_water.shape[0])
+
 n_particles_water = xyz_water.shape[0]
 print("Number of Water Particles: ", n_particles_water)
 
 debris_dimensions = 1.0 * np.array([0.5, 0.05, 0.1]) # Debris dimensions in meters
-debris_array = np.array([1, 1, 1]) # Number of debris in the debris-field in each direction
+debris_array = np.array([8, 1, 1]) # Number of debris in the debris-field in each direction
 debris_spacing_gap = 5 * np.array([dx, dx, dx]) # Spacing between faces of debris in the debris-field, 
 debris_field_downstream_edge = 43.8 # Downstream edge of the debris field in meters, from Mascerenas 2022 experiments 
 debris_water_gap = dx # Gap between water and debris in, Y direction, to avoid overlap/stickiness
 debris_spacing = debris_dimensions + debris_spacing_gap # Spacing between centers of debris in the debris-field
 debris_field_dimensions = debris_spacing * debris_array - debris_spacing_gap # Dimensions of the debris-field
-debris_offset = np.array([debris_field_downstream_edge - debris_field_dimensions[0], max_water_depth_tsunami + debris_water_gap, (flume_width_3d - debris_field_dimensions[2]) / 2.0]) + np.array([buffer_cells*dx + buffer_shift_particles*dx, buffer_cells*dx + buffer_shift_particles*dx, buffer_cells*dx + buffer_shift_particles*dx]) # Offset of the debris-field min corner from the origin, incl. domain buffer
+debris_offset = np.array([debris_field_downstream_edge - debris_field_dimensions[0], max_water_depth_tsunami + debris_water_gap, (flume_width - debris_field_dimensions[2]) / 2.0]) + np.array([buffer_cells*dx + buffer_shift_particles*dx, buffer_cells*dx + buffer_shift_particles*dx, buffer_cells*dx + buffer_shift_particles*dx]) # Offset of the debris-field min corner from the origin, incl. domain buffer
 
 # Make an array to hold all the particle positions for a piece of debris
 xyz_debris = np.mgrid[(debris_offset[0] + particle_spacing/2):(debris_offset[0] + debris_dimensions[0] - particle_spacing/2):particle_spacing, (debris_offset[1] + particle_spacing/2):(debris_offset[1] + debris_dimensions[1] - particle_spacing/2):particle_spacing, (debris_offset[2] + particle_spacing/2):(debris_offset[2] + debris_dimensions[2] - particle_spacing/2):particle_spacing].reshape(3, -1).T 
@@ -280,9 +354,24 @@ for i in range(debris_array[0]):
         for k in range(debris_array[2]):
             xyz_debris_group[(i * debris_array[1] * debris_array[2] + j * debris_array[2] + k) * xyz_debris.shape[0]:(i * debris_array[1] * debris_array[2] + j * debris_array[2] + k + 1) * xyz_debris.shape[0], :] = xyz_debris + np.array([i * debris_spacing[0], j * debris_spacing[1], k * debris_spacing[2]])
 
-xyz_debris_group = xyz_debris_group[np.where((xyz_debris_group[:, 2] >= dx * (buffer_cells + buffer_shift_particles)) & (xyz_debris_group[:, 2] <= flume_width_3d + dx * (buffer_cells + buffer_shift_particles)))] # Remove debris below the water surface
-
+xyz_debris_group = xyz_debris_group[np.where((xyz_debris_group[:, 2] >= dx * (buffer_cells + buffer_shift_particles)) & (xyz_debris_group[:, 2] <= flume_width + dx * (buffer_cells + buffer_shift_particles)))] # Remove debris below the water surface
+xyz_debris_group = xyz_debris_group[np.lexsort((xyz_debris_group[:,2], xyz_debris_group[:,1], xyz_debris_group[:,0]))]   
 n_particles_debris_group = xyz_debris_group.shape[0]
+
+
+# Downsample a point cloud so that all the points are separated by approximately a fixed value
+# i.e. the downsampled points follow a blue noise distribution
+# idx is an array of integer indices into v indicating which samples to keep
+# downsampling = True
+# downsampling_ratio = 1000 # Downsamples by 100x
+# print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
+if downsampling:
+    downsample_radius_debris = 2.0 * particle_spacing
+    idx_debris_sampled = pcu.downsample_point_cloud_poisson_disk(xyz_debris, downsample_radius_debris)
+    xyz_debris_sampled = xyz_debris[idx_debris_sampled] # Use the indices to get the sample positions 
+    # n_debris_sampled = n[idx] # Use the indices to get the sample  normals
+    print("Downsampled debris Particles: ", xyz_debris_sampled.shape[0], " , Original debris Particles: ", xyz_debris.shape[0])
+
 
 print("Debris Dimensions: ", debris_dimensions)
 print("Debris Array: ", debris_array)
@@ -296,6 +385,9 @@ max_base_y = np.max(xyz_water[:, 1]) # Gets Baseline y value before wave might c
 
 # Combine the water and debris particle positions
 xyz = np.concatenate((xyz_water, xyz_debris_group), axis=0)
+
+xyz_sampled = np.concatenate((xyz_water_sampled, xyz_debris_sampled), axis=0)
+idx_sampled = np.concatenate((idx_water_sampled, idx_debris_sampled), axis=0)
 
 if DIMENSIONS == 3:
     if set_particle_count_style == "auto" or "automatic":
@@ -312,16 +404,10 @@ print(f"Max Initialized Water Particle Height: {max_base_y}")
 # print("XYZ Numpy Shape: ", xyz_numpy.shape)
 
 
+# ------------------------ Particle Material Setup ------------------------
+# n_particles_water = (flume_height, flume_height, flume_width, flume_length)
 
-# n_particles_water = (flume_height_3d, flume_height_3d, flume_width_3d, flume_length_3d)
 
-downsampling = True
-downsampling_ratio = 1000 # Downsamples by 100x
-# n_particles_water = (0.9 * 0.2 * grid_length * grid_length) * n_grid_base**2
-
-print("Downsampling: {}".format(" enabled" if downsampling else "disabled"))
-
-print("Number of Downsampled Particles: ", int(n_particles / downsampling_ratio))
 
 print("Number of Grid-Nodes each Direction: ", n_grid_x, n_grid_y, n_grid_z)
 print("dx: ", dx)
@@ -378,11 +464,13 @@ board_velocity = ti.Vector.field(n=DIMENSIONS, dtype=float, shape=())
 board_velocity[None] = [0.0, 0.0, 0.0]
 time = 0.0
 
+
+# ------------------------ Simulation State Setup ------------------------
 #Define some parameters we would like to track
 data_to_save = [] #used for saving positional data for particles 
 v_data_to_save = []
 
-bounds = [[0.0 + buffer_cells / n_grid, flume_length_3d / grid_length + buffer_cells / n_grid], [0.0 + buffer_cells / n_grid, flume_height_3d / grid_length + buffer_cells / n_grid], [0.0 + buffer_cells / n_grid, flume_width_3d / grid_length + buffer_cells / n_grid]] # For 3D
+bounds = [[0.0 + buffer_cells / n_grid, flume_length / grid_length + buffer_cells / n_grid], [0.0 + buffer_cells / n_grid, flume_height / grid_length + buffer_cells / n_grid], [0.0 + buffer_cells / n_grid, flume_width / grid_length + buffer_cells / n_grid]] # For 3D
 
 # bounds = [[0.1, 0.9], [0.1, 0.9], [0.1, 0.9]] # For 3D
 vel_mean = []
@@ -390,6 +478,7 @@ vel_std = []
 acc_mean = []
 acc_std = []
 
+# ------------------------ Taichi Fields State Setup ------------------------
 gravity = ti.Vector.field(n=DIMENSIONS, dtype=float, shape=()) # Gravity vector, [m/s^2]
 
 x = ti.Vector.field(DIMENSIONS, dtype=float, shape=n_particles)  # position
@@ -721,11 +810,11 @@ def apply_boundary_conditions(i, j, k):
             grid_v[i, j, k][2] = 0
         if k > n_grid_z - buffer_cells and grid_v[i, j, k][2] > 0:
             grid_v[i, j, k][2] = 0
-        if i > flume_length_3d / grid_length * n_grid - buffer_cells and grid_v[i, j, k][0] > 0:
+        if i > flume_length / grid_length * n_grid - buffer_cells and grid_v[i, j, k][0] > 0:
             grid_v[i, j, k][0] = 0
-        if j > flume_height_3d / grid_length * n_grid - buffer_cells and grid_v[i, j, k][1] > 0:
+        if j > flume_height / grid_length * n_grid - buffer_cells and grid_v[i, j, k][1] > 0:
             grid_v[i, j, k][1] = 0
-        if k > flume_width_3d / grid_length * n_grid - buffer_cells and grid_v[i, j, k][2] > 0:
+        if k > flume_width / grid_length * n_grid - buffer_cells and grid_v[i, j, k][2] > 0:
             grid_v[i, j, k][2] = 0
         if i <= board_states[None][0] / grid_length * n_grid + 1 and grid_v[i, j, k][0] < board_velocity[None][0]:
             grid_v[i, j, k][0] = 1.0 * board_velocity[None][0]
@@ -917,13 +1006,34 @@ def reset():
             F[i] = ti.Matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
             Jp[i] = 1.0
             C[i] = ti.Matrix.zero(float, DIMENSIONS, DIMENSIONS)
+        
+            
             if ti.static(use_antilocking):
                 JBar[i] = 1.0
+    
+    if ti.static(DIMENSIONS == 2):
+        for i, j in grid_m:
+            grid_m[i, j] = 0
+            grid_v[i, j] = [0.0, 0.0]
+            if ti.static(use_antilocking):
+                grid_VBar[i, j] = 0
+                grid_JBar[i, j] = 0
+    elif ti.static(DIMENSIONS == 3):
+        for i, j, k in grid_m:
+            grid_m[i, j, k] = 0
+            grid_v[i, j, k] = [0.0, 0.0, 0.0]
+            if ti.static(use_antilocking):
+                grid_VBar[i, j, k] = 0
+                grid_JBar[i, j, k] = 0
+                
+        
         
     if ti.static(DIMENSIONS == 2):
         board_states[None] = [float(piston_pos[0]), 0.0]  # Initial piston position
+        board_velocity[None] = [0.0, 0.0]  # Initial piston velocity
     elif ti.static(DIMENSIONS == 3):
         board_states[None] = [float(piston_pos[0]), 0.0, 0.0]  # Initial piston position
+        board_velocity[None] = [0.0, 0.0, 0.0]  # Initial piston velocity
      
 
 def save_metadata(file_path):
@@ -944,16 +1054,25 @@ def save_metadata(file_path):
     """
     #Using a list for each time step for formatting
     global v_data_to_save
+    # Assume scaled already
     global bounds
     vel = np.stack(v_data_to_save,axis=0) / grid_length # Scale velocity data to 1x1x1 domain for GNS
     vel_diff = np.diff(vel, axis=0) #computing acceleration along the time dependant axis
     
     #Define meta data dictionary from trajectories and timesteps
-    vel_mean = np.nanmean(vel, axis=(0, 1))
-    vel_std = np.nanstd(vel, axis=(0, 1)) #standard deviation of velocity
-    acc_mean = np.nanmean(vel_diff, axis=(0, 1)) #mean acceleration from velocity
-    acc_std = np.nanstd(vel_diff, axis=(0, 1))  #standard deviation of acceleration from velocity 
-   
+    if DIMENSIONS == 2:
+        vel_mean = np.nanmean(vel, axis=(0))
+        vel_std = np.nanstd(vel, axis=(0))
+        acc_mean = np.nanmean(vel_diff, axis=(0))
+        acc_std = np.nanstd(vel_diff, axis=(0))
+    elif DIMENSIONS == 3:
+        vel_mean = np.nanmean(vel, axis=(0, 1))
+        vel_std = np.nanstd(vel, axis=(0, 1))
+        acc_mean = np.nanmean(vel_diff, axis=(0, 1))
+        acc_std = np.nanstd(vel_diff, axis=(0, 1))
+    else:
+        raise Exception("Improper Dimensionality for Simulation Must Be 2D or 3D ")    
+    
     # Convert numpy types to native Python types
     vel_mean = [float(x) for x in vel_mean]
     vel_std = [float(x) for x in vel_std]
@@ -965,11 +1084,9 @@ def save_metadata(file_path):
     bspline_max_reach = 1.5 # [Cell Units]
     downsampled_connectivity_radius = (2 * dx * connectivity_amplifier * bspline_max_reach) / (downsampling_ratio**(1/DIMENSIONS))
     downsampled_connectivity_radius = float(downsampled_connectivity_radius / grid_length) # Scale to 1x1x1 domain for GNS
-    
-    # Assume scaled already
-    bounds_metadata = []
     bounds_i = []
     bounds_temp = []
+    bounds_metadata = []
     for i in range(DIMENSIONS):
         bounds_i = [float(bound_ii) for bound_ii in bounds[i]]
         bounds_metadata.append(bounds_i)
@@ -992,9 +1109,8 @@ def save_metadata(file_path):
             print("Swap the bounds if they are in the wrong order, i.e. [1, 0] -> [0, 1]")
             bounds_temp = float(bounds_metadata[i][0])
             bounds_metadata[i][0] = float(bounds_metadata[i][1])
-            bounds = bounds_temp
-            
-    print("bounds for metadata to GNS: ", bounds_metadata)
+            # bounds = bounds_temp
+           
     
     # Formatting enforced
     metadata = {
@@ -1011,12 +1127,12 @@ def save_metadata(file_path):
         "acc_std": acc_std, #[0.0002582944917306106, 0.00029554531667679154]
     }
     
-    print("Metadata: ", metadata)
+    print("Cpmstricted simulation metadata: ", metadata)
     
     # Write metadata to a JSON file
     with open(os.path.join(file_path, 'metadata.json'), 'w') as file:
         json.dump(metadata, file)
-        print("Metadata Saved!\n")
+        print("Saved metadata to file: ", os.path.join(file_path, 'metadata.json', "\n"))
 
 def save_simulation():
     """Save train.npz, test.npz,or valid.npz to file
@@ -1062,19 +1178,32 @@ def save_simulation():
     mat_data_tmp = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
 
     mat_data = np.asarray(mat_data_tmp, dtype=object)
-    pos_data = np.stack(data_to_save, axis=0)
+    pos_data = np.stack(data_to_save, axis=0) / grid_length # Scale position data to 1x1x1 domain for GNS
+
+    print("Down-sampling index list: ", idx_sampled.shape)
+
 
     # Perform downsampling for GNS
-    if downsampling:
-        downsampled_mat_data = mat_data[::downsampling_ratio]
+    downsampling_style = "poisson-disk"
+    if downsampling_style == "poisson-disk":
+        # Use the idx's to sample the data (i.e. according to Poisson-Disk Sampling, voxel, manual, etv)
+        downsampled_data = pos_data[:, idx_sampled, :]
+        downsampled_mat_data = mat_data[idx_sampled]
+    elif downsampling_style == "stride":
+        # Save a GNS downsampled particle every downampling_ratio
         downsampled_data = pos_data[:,::downsampling_ratio,:]
-
+        downsampled_mat_data = mat_data[::downsampling_ratio]
+    elif downsampling_style == "random":
+        # Randomly sample the data
+        downsampled_data = pos_data[:, np.random.choice(pos_data.shape[1], size=xyz_sampled.size[0], replace=False), :]
+        downsampled_mat_data = mat_data[np.random.choice(mat_data.shape[0], size=xyz_sampled.size[0], replace=False)]
+    else:
+        raise Exception("Downsampling Style Not Supported")
 
     #check version of numpy >= 1.22.0
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
     # Should add a check for the python version as well
     
-    # This Doesnt work with GNS
     if (np.version.version > '1.23.5'):
         print("Using numpy version (>= 1.23.5), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
         pos_data = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
@@ -1096,27 +1225,32 @@ def save_simulation():
         
     if data_designation.lower() in ("r", "rollout", "test"):
         # Should clarify the difference in naming between test and rollout
+        print("Saving simulatiomn particle data to: [", file_path, "/test.npz] for testing of surrogate models trained on similar but different data, i.e. [train.npz].")
         output_file_path = os.path.join(file_path, "test.npz")
         np.savez_compressed(f'{file_path}/test.npz', **simulation_data)
+        output_particles_as_vtk = True
+
 
     elif data_designation.lower() in ("t", "train"):
+        print("Saving simulation particle data to: [", file_path, "/train.npz] for training surrogate models.")
         output_file_path = os.path.join(file_path, "train.npz")
         np.savez_compressed(f'{file_path}/train.npz', **simulation_data)
         save_metadata(file_path)
 
     elif data_designation.lower() in ("v", "valid"):
+        print("Saving simulation particle data to: [", file_path, "/valid.npz] for validation of trained and tested surrogate models.")
         output_file_path = os.path.join(file_path, "valid.npz")
         np.savez_compressed(f'{file_path}/valid.npz', **simulation_data) # Proper 
         
     else:
+        "Unspecified data designation, saving to: [",  cwd_path,"/unspecified_sim_data.npz]"
         output_file_path = os.path.join(cwd_path, "unspecified_sim_data.npz")
-        np.savez_compressed("unspecified_sim_data2.npz", **simulation_data)
+        np.savez_compressed(os.path.join(cwd_path, "unspecified_sim_data2.npz"), **simulation_data)
         #np.savez_compressed('simulation_data_kwargs.npz', pos_data=downsampled_data, material_ids=downsampled_mat_data)
         # Save to HDF5
         #with h5py.File(f'{cwd_path}/unspecified_sim_data.h5', 'w') as f:
         #    f.create_dataset('pos_data', data=downsampled_data)
         #    f.create_dataset('material_ids', data=downsampled_mat_data)
-        
     print("Simulation Data Saved to: ", file_path)
 
 # Define a Taichi field to store the result
@@ -1125,12 +1259,12 @@ def save_simulation():
 def create_flume_vertices():
     flume_vertices[0] = ti.Vector([0, 0, 0])
     flume_vertices[1] = ti.Vector([grid_length, 0, 0])
-    flume_vertices[2] = ti.Vector([grid_length, 0, flume_width_3d])
-    flume_vertices[3] = ti.Vector([0, 0, flume_width_3d])
-    flume_vertices[4] = ti.Vector([0, flume_height_3d, 0])
-    flume_vertices[5] = ti.Vector([grid_length, flume_height_3d, 0])
-    flume_vertices[6] = ti.Vector([grid_length, flume_height_3d, flume_width_3d])
-    flume_vertices[7] = ti.Vector([0, flume_height_3d, flume_width_3d])
+    flume_vertices[2] = ti.Vector([grid_length, 0, flume_width])
+    flume_vertices[3] = ti.Vector([0, 0, flume_width])
+    flume_vertices[4] = ti.Vector([0, flume_height, 0])
+    flume_vertices[5] = ti.Vector([grid_length, flume_height, 0])
+    flume_vertices[6] = ti.Vector([grid_length, flume_height, flume_width])
+    flume_vertices[7] = ti.Vector([0, flume_height, flume_width])
 
 @ti.kernel
 def create_flume_indices():
@@ -1159,17 +1293,17 @@ def copy_to_field(source: ti.types.ndarray(), target: ti.template()):
             target[i][j] = source[i, j]
 
 def render_3D():
-    #camera.position(grid_length*1.2, flume_height_3d*10, flume_width_3d*8) #Actual Camera to use
-    #camera.position(grid_length*1.5, flume_height_3d*4, flume_width_3d*6) # 50m flume camera
-    camera.position(grid_length*1.5, flume_height_3d*4, flume_width_3d*.5) # Front View
+    #camera.position(grid_length*1.2, flume_height*10, flume_width*8) #Actual Camera to use
+    #camera.position(grid_length*1.5, flume_height*4, flume_width*6) # 50m flume camera
+    camera.position(grid_length*1.5, flume_height*4, flume_width*.5) # Front View
 
-    camera.lookat(grid_length/2, flume_height_3d/2, flume_width_3d/2)
+    camera.lookat(grid_length/2, flume_height/2, flume_width/2)
     camera.up(0, 1, 0)
     camera.fov(60)
     scene.set_camera(camera)
 
     scene.ambient_light((0.8, 0.8, 0.8))
-    scene.point_light(pos=(grid_length/2, flume_height_3d*2, flume_width_3d*2), color=(1, 1, 1))
+    scene.point_light(pos=(grid_length/2, flume_height*2, flume_width*2), color=(1, 1, 1))
 
     # Render the flume
     # Render the bottom face
@@ -1197,14 +1331,18 @@ sequence_length = int(input('How many seconds to run this simulations? [Waiting 
 
 # Preallocate numpy arrays to store particle positions and velocities
 # NOTE: This can become many GBs large, exceeding the RAM of your computer. TODO: Use a file(s) on disk and perform writes in smaller chunks from the RAM
+x_data_gns= np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32) # float 32 for mac compatibility
+v_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32)
+wave_numerical_soln = np.zeros((sequence_length, 3), dtype=np.float32) # 1. time 2. corresponding x positional value 3. max y 
+max_wave_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
 max_wave_y = -np.inf # Initialize with unmistakable minamal value
 max_wave_ind = 0
 wave_water_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
-#wave_base_test = -np.inf
 wave_formed = False
 wave_height = 0
 formed_wave_frames = 0
 time_formed = 0.0  # Reset time once wave is fully formed
+
 
 gui_res = min(1024, n_grid) # Set the resolution of the GUI
 gui_res_base = 1024
@@ -1247,7 +1385,7 @@ elif DIMENSIONS == 3 and not use_vulkan_gui:
     pc_res_coef = 1.0 # Assuming 2k monitor
     if on_2k_monitor:
         pc_res_coef *= 1.25
-    gui_res_for_multi_viewport = (int(pc_res_coef * 1.0*(flume_length_3d + flume_length_3d) / grid_length * gui_res_base), int(pc_res_coef * 1.75*(grid_length_y + grid_length_z) / grid_length * gui_res_base)) 
+    gui_res_for_multi_viewport = (int(pc_res_coef * 1.0*(flume_length + flume_length) / grid_length * gui_res_base), int(pc_res_coef * 1.75*(grid_length_y + grid_length_z) / grid_length * gui_res_base)) 
     palette = [0x2389da, 0xED553B, 0x068587, 0x6D214F]
     gravity[None] = [0.0, -9.80665, 0.0] # Gravity in m/s^2, this implies use of metric units
     gui_background_color_white = 0xFFFFFF # White or black generally preferred for papers / slideshows, but its up to you
@@ -1260,7 +1398,24 @@ base_frame_dir = './Flume/figures/'
 os.makedirs(base_frame_dir, exist_ok=True) # Ensure the directory exists
 frame_paths = []
 
+def T(a):
+    if dim == 2:
+        return a
+
+    phi, theta = np.radians(60), np.radians(32)
+
+    a = a - 0.5
+    x, y, z = a[:, 0], a[:, 1], a[:, 2]
+    cp, sp = np.cos(phi), np.sin(phi)
+    ct, st = np.cos(theta), np.sin(theta)
+    x, z = x * cp + z * sp, z * cp - x * sp
+    u, v = x, y * ct + z * st
+    return np.array([u, v]).swapaxes(0, 1) + 0.5
+
+
+
 reset() # Reset sim and initialize particles
+
 
 for frame in range(sequence_length):
     # for s in range(int(2e-3 // dt)): # Will need to double-check the use of 2e-3, dt, etc.
@@ -1269,6 +1424,8 @@ for frame in range(sequence_length):
         substep()
         time += dt # Update time by dt so that the time used in move_board_solitary() is accurate, otherwise the piston moves only once every frame position-wise which causes instabilities
 
+
+    gui
     print("\n" + "=" * 30)
     print("     Simulation Details     ")
     print("=" * 30)
@@ -1285,7 +1442,7 @@ for frame in range(sequence_length):
     print("  Simulation Particle Data  ")
     print("=" * 30)
 
-    if board_states[None][0] < 3.5:  # max piston draw is 3.9m
+    if board_states[None][0] < piston_wait_time:  # max piston draw is 3.9m
         print(f"Piston Position x = {board_states[None][0]:.5f}")
         if board_velocity[None][0] >= 0.2:
             print(f"Piston Velocity V_x = {board_velocity[None][0]:.5f}")
@@ -1325,24 +1482,10 @@ for frame in range(sequence_length):
             else:
                 print("\nWave height not within expected range.")
 
-    print("\n" + "=" * 30)  
-    clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
-    # print("TestHex: ", int('0x000000',0))
-    # print(cm.plasma(x.to_numpy()[:, 1] / flume_height_3d)[:,:3].max())
-    # Elevation_palette = []
-    # for rgba_tuple in Elevation_img:
+    print("\n" + "=" * 30) 
     
-    #     Elevation_palette.append(int('0x' + ''.join(f'{rgb_component:02X}' for rgb_component in rgba_tuple[:3])))
+    clipped_material = np.clip(material.to_numpy(), 0, len(palette) - 1) #handles error where the number of materials is greater len(palette)
 
-
-    # visualize_variable = "Velocity"
-    # if visualize_variable == "Elevation":
-    #     Elevation_img = (cm.plasma(x.to_numpy()[:, 1] / Elevation_vmax)[:,:3] * 255)
-    #     chosen_palette = [ (int('0x' + ''.join(f'{rgb_component:02X}' for rgb_component in rgba_tuple[:3]), 0)) for rgba_tuple in Elevation_img] 
-    # elif visualize_variable == "Velocity":
-    #     Velocity_vmax = 0.1
-    #     Velocity_img = (cm.plasma(np.sqrt(v.to_numpy()[:, 0]**2 + v.to_numpy()[:, 1]**2 + v.to_numpy()[:,2]**2) / Velocity_vmax)[:,:3] * 255).astype(np.uint8)
-    #     chosen_palette = Velocity_img
     vis_velocity_magnitude = True
     vis_wave_elevation = False
     vis_pressure = True
@@ -1355,13 +1498,17 @@ for frame in range(sequence_length):
         Elevation_img = (cm.hsv(0.5 + np.maximum(-1/3.0, (x.to_numpy()[:, 1] - Elevation_vmin) / (Elevation_vmax) ))[:,:3] * 255).astype(np.uint8)
         Elevation_palette = [ (int('0x' + ''.join(f'{rgb_component:02X}' for rgb_component in rgba_tuple[:3]), 0)) for rgba_tuple in Elevation_img] 
     if vis_velocity_magnitude:
-        Velocity_vmax = 4
+        Velocity_vmax = 1.0
+        if (experiment == "breaking"):
+            Velocity_vmax = 4.0
+        elif (experiment == "unbreaking"):
+            Velocity_vmax = 0.25
         Velocity_img = ((cm.viridis(np.sqrt(v.to_numpy()[:n_particles_water, 0]**2 + v.to_numpy()[:n_particles_water, 1]**2 + v.to_numpy()[:n_particles_water,2]**2) / Velocity_vmax)[:,:3]) * 255).astype(np.uint8)
         Velocity_img = np.concatenate((Velocity_img, ((cm.magma(np.sqrt(v.to_numpy()[n_particles_water:(n_particles_water+n_particles_debris_group), 0]**2 + v.to_numpy()[n_particles_water:(n_particles_water+n_particles_debris_group), 1]**2 + v.to_numpy()[n_particles_water:(n_particles_water+n_particles_debris_group),2]**2) / Velocity_vmax)[:,:3]) * 255).astype(np.uint8)), axis=0)
         Velocity_palette = [ (int('0x' + ''.join(f'{rgb_component:02X}' for rgb_component in rgba_tuple[:3]), 0)) for rgba_tuple in Velocity_img] 
 
     if vis_pressure:
-        Pressure_vmax = (max_water_depth_tsunami + wave_height_expected)* 9.80665 * 1000.0
+        Pressure_vmax = (max_water_depth_tsunami + wave_height_expected)* 9.80665 * .10000
         Pressure_img = (cm.turbo(np.maximum(0.0,(bulk_modulus / gamma_water) * (np.linalg.det(F.to_numpy()[:])**(-gamma_water) - 1) / (Pressure_vmax)))[:,:3] * 255).astype(np.uint8)
         Pressure_palette = [ (int('0x' + ''.join(f'{rgb_component:02X}' for rgb_component in rgba_tuple[:3]), 0)) for rgba_tuple in Pressure_img]    
     palette_questions = [vis_velocity_magnitude, vis_wave_elevation, vis_pressure] # Order matters
@@ -1381,6 +1528,8 @@ for frame in range(sequence_length):
         # If no palette was requested, default to the original material segmented palette
         chosen_palette = palette
         chosen_palette_indices = clipped_material
+    
+    np_x = x.to_numpy()
     
     if DIMENSIONS == 2:
         if gui.get_event(ti.GUI.PRESS):
@@ -1422,13 +1571,15 @@ for frame in range(sequence_length):
         # DO NOT USE MATPLOTLIB FOR 3D RENDERING
         # Update the scene with particle positions
 
-        if (use_vulkan_gui):
+        if use_vulkan_gui:
 
             render_3D() # Show window is handled below 
             # gui.update()
             for event in gui.get_events(ti.ui.PRESS):
                 if event.key == ti.ui.ESCAPE:
                     break
+                
+            
 
         else:
             if gui.get_event(ti.GUI.PRESS):
@@ -1436,15 +1587,24 @@ for frame in range(sequence_length):
                     break
 
             gui_res_ratio = np.array([gui_res_ratio_x, gui_res_ratio_y, gui_res_ratio_z])
-            viewport_buffer = 1.025 # Buffer ratio to ensure each flume viewport is visible and separated
+            viewport_buffer = 1.0125 # Buffer ratio to ensure each flume viewport is visible and separated
             view_style = "both"
-            if view_style != "both":
+            if view_style =="perspective":
+                T(np_x) 
+                gui.circles(
+                    T(np_x / grid_length) * gui_res_ratio,
+                    radius=1.5,
+                    palette = chosen_palette,
+                    palette_indices = chosen_palette_indices,
+                )
+            elif view_style != "both" and view_style != "perspective":
+                
                 if view_style == "top":
                     view_slices = [0,2]
                 elif view_style == "side":
                     view_slices = [0,1]
-                else:
-                    view_slices = [0,1]
+                elif view_style == "front":
+                    view_slices = [2,1]
                 gui.circles(
                     x.to_numpy()[:,view_slices] / grid_length * gui_res_ratio[view_slices],
                     radius=1.0,
@@ -1452,25 +1612,32 @@ for frame in range(sequence_length):
                     palette_indices = [palette_idx for palette_idx in range(len(chosen_palette))]
                 )
             else:
-
                 gui.circles(
-                    x.to_numpy()[:,[0,1]] / grid_length * gui_res_ratio[[0,1]],
+                    np_x[:,[0,1]] / grid_length * gui_res_ratio[[0,1]],
                     radius=1.5,
                     palette = chosen_palette,
                     palette_indices = chosen_palette_indices,
                 )
                 gui.circles(
-                    x.to_numpy()[:,[2,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([(flume_length_3d * viewport_buffer) / grid_length * gui_res_ratio[0], 0.0]),
+                    np_x[:,[2,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([(flume_length * viewport_buffer) / grid_length * gui_res_ratio[0], 0.0]),
+                    radius=1.5,
+                    palette = chosen_palette,
+                    palette_indices = chosen_palette_indices,
+                )
+                gui_persp_zoom = 2.0
+                gui.circles(
+                    np_x[:,[0,2]] / grid_length * gui_res_ratio[[0,1]] + np.array([0.0, (flume_height * viewport_buffer) / grid_length * gui_res_ratio[1]]),
                     radius=1.5,
                     palette = chosen_palette,
                     palette_indices = chosen_palette_indices,
                 )
                 gui.circles(
-                    x.to_numpy()[:,[0,2]] / grid_length * gui_res_ratio[[0,1]] + np.array([0.0, (flume_height_3d * viewport_buffer) / grid_length * gui_res_ratio[1]]),
+                    T(gui_persp_zoom * np_x / grid_length) + np.array([(flume_length * viewport_buffer) / grid_length / 0.25 * gui_res_ratio[0], 2 * gui_persp_zoom * (flume_height * viewport_buffer) / grid_length * gui_res_ratio[1]]),
                     radius=1.5,
                     palette = chosen_palette,
                     palette_indices = chosen_palette_indices,
                 )
+                
                 
                 requested_a_palette = False
                 j = 0
@@ -1487,20 +1654,21 @@ for frame in range(sequence_length):
                     chosen_palette = palette
                     chosen_palette_indices = clipped_material
                 
+                # np.where(x.to_numpy(), x.to_numpy()[:,2] < (flume_width/2 + dx*buffer_cells)/2)[:,[0,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([dx * buffer_cells, dx * buffer_cells + (flume_height * (viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
                 gui.circles(
-                    x.to_numpy()[:,[0,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([0.0, (flume_height_3d * (viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
+                    np_x[:,[0,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([dx * buffer_cells, dx * buffer_cells + (flume_height * (viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
                     radius=1.5,
                     palette = chosen_palette,
                     palette_indices = chosen_palette_indices,
                 )
                 gui.circles(
-                    x.to_numpy()[:,[2,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([(flume_length_3d * (viewport_buffer)) / grid_length * gui_res_ratio[0], (flume_height_3d * (viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
+                    np_x[:,[2,1]] / grid_length * gui_res_ratio[[0,1]] + np.array([dx * buffer_cells + (flume_length * (viewport_buffer)) / grid_length * gui_res_ratio[0], dx * buffer_cells + (flume_height * (viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
                     radius=1.5,
                     palette = chosen_palette,
                     palette_indices = chosen_palette_indices,
                 )
                 gui.circles(
-                    x.to_numpy()[:,[0,2]] / grid_length * gui_res_ratio[[0,1]] + np.array([0.0, (flume_height_3d * (viewport_buffer + viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
+                    np_x[:,[0,2]] / grid_length * gui_res_ratio[[0,1]] + np.array([dx * buffer_cells , dx * buffer_cells + (flume_height * (viewport_buffer + viewport_buffer + viewport_buffer)) / grid_length * gui_res_ratio[1]]),
                     radius=1.5,
                     palette = chosen_palette,
                     palette_indices = chosen_palette_indices,
@@ -1512,23 +1680,27 @@ for frame in range(sequence_length):
             
             #print(piston_pos)
             if view_style == "top" or view_style == "both":
-                piston_draw = np.array([board_states[None][0] / grid_length , flume_width_3d/ grid_length ])
+                piston_draw = np.array([board_states[None][0] / grid_length , flume_width/ grid_length])
                 gui.line(
-                    [piston_draw[0], 0.0], [piston_draw[0], flume_width_3d / grid_length * gui_res_ratio_z],
+                    [piston_draw[0], 0.0], [piston_draw[0], flume_width / grid_length * gui_res_ratio_z + (viewport_buffer) * gui_res_ratio_z],
                     color=boundary_color,
                     radius=2
                 )
-                gui.line(
-                    [0.0, grid_ratio_z*gui_res_ratio_z], [grid_ratio_x, grid_ratio_z*gui_res_ratio_z],
-                    color=boundary_color,
-                    radius=2
-                )
+                # gui.line(
+                #     [0.0, grid_ratio_z*gui_res_ratio_z], [grid_ratio_x, grid_ratio_z*gui_res_ratio_z],
+                #     color=boundary_color,
+                #     radius=2
+                # )
+
+                p1 = [(buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_x, (buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_z + (viewport_buffer) * gui_res_ratio_z]
+                p2 = [(n_grid_x - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_x, (n_grid_y - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_z + (viewport_buffer) * gui_res_ratio_z]
+                gui.rect(topleft=p1, bottomright=p2, color=0x000000)
 
             if view_style == "side" or view_style == "both":
-                piston_draw = np.array([board_states[None][0] / grid_length , flume_height_3d/ grid_length ])
+                piston_draw = np.array([float(board_states[None].to_numpy()[0]) / grid_length + buffer_shift_particles * dx, flume_height / grid_length])
 
                 gui.line(
-                    [piston_draw[0], 0.0], [piston_draw[0], flume_height_3d / grid_length * gui_res_ratio_y],
+                    [piston_draw[0] * gui_res_ratio_x, 0.0], [piston_draw[0] * gui_res_ratio_x, flume_height / grid_length * gui_res_ratio_y],
                     color=boundary_color,
                     radius=2
                 )
@@ -1538,12 +1710,38 @@ for frame in range(sequence_length):
                     radius=2
                 )
 
-            p1 = [3/n_grid, 3/n_grid]
-            p2 = [(n_grid-6)/n_grid, (n_grid-6)/n_grid]
-            gui.rect(topleft=p1, bottomright=p2, color=0x000000)
+                p1 = [(buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_z, (buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_y]
+                p2 = [(n_grid_x - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_x, (n_grid_y - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_y]
+                
+                gui.rect(topleft=p1, bottomright=p2, color=0x000000)
 
+            # if view_style =="perspective" or "both":
+            #     p1 = [(buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_x, (buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_y, (buffer_cells + buffer_shift_particles) / n_grid * gui_res_ratio_z]
+            #     p2 = [(n_grid_x - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_x, (n_grid_y - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_y, (n_grid_z - (buffer_cells + buffer_shift_particles)) / n_grid * gui_res_ratio_z]
+            #     draw_persp_box = T(np.array([p1, p2])) 
+            #     gui.rect(draw_persp_box[0], draw_persp_box[1], color=0x000000)
+                
     frame_filename = f'frame_{frame:05d}.png'
     frame_path = os.path.join(base_frame_dir, frame_filename)
+
+    if output_particles_as_vtk:
+        # Save the particles as a VTK file
+        # x_sf.from_numpy(np_x.reshape(-1, 3))
+        
+        
+        # ti.tools.vtk.write_vtk(x_sf, f'particles_frame_{frame:05d}') # NOTE: vtk saves a *.vtr file
+        pointsToVTK(f'particles_frame_{frame:05d}',
+                    np.array(np_x[:,0], dtype=np.float32),  
+                    np.array(np_x[:,1], dtype=np.float32), 
+                    np.array(np_x[:,2], dtype=np.float32), 
+                    data={"elev": np.array(np_x[:,1],dtype=int)},
+                    )#, "id": material.to_numpy(), "pressure": Jp.to_numpy()}) #, "velocity": np.linalg.norm(v.to_numpy().reshape(-1, 3), axis=1)})
+
+        # # Example 2
+        # x = np.arange(1.0, 10.0, 0.1)
+        # y = np.arange(1.0, 10.0, 0.1)
+        # z = np.arange(1.0, 10.0, 0.1)
+        # pointsToVTK("./line_points", np_x[:][0], np_x[:][1], np_x[:][2], data={"elev": np_x[:][1]})
 
     if output_png and output_gui:
         try:
@@ -1584,20 +1782,18 @@ if frame_paths:
         print(f"Error creating GIF: {e}")
     
 
-# Validation of simulation data
-
 # TODO: Keep wave formed, wave time saving, and saving_frme in the main loop.
-
 # TODO: Delete data_to_save and v_data_to_save 
 # TODO: Save it all to either taichi or csv file
 # TODO: Save Max water particle values to wave_numerical_soln = np.zeros((abs(formed_wave_frames), 3), dtype=np.float32)
 
-#Prep for GNS input
+
+# Prep for GNS input
 save_simulation()
 
+# Validation of simulation data
 wave_validator = SolitonWaveValidation(H=wave_height_expected, h = max_water_depth_tsunami)
 wave_validator.validate_simulation(wave_numerical_soln)
-
 
 
 #if using save_sim.py script

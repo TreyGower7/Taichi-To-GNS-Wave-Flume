@@ -10,9 +10,24 @@ imgui.ini
 taichi_flume_sims/__pycache__
 
 # Ignore the entire Flume directory
-/Flume
+./Flume
+./Flume**
+
+# Later improve pycache usage
+taichi-flume-sims/__pycache__/Simulation_validation.cpython-39.pyc
+
+# Ignore simulation data files, since they are large potentially
+*.vtu
+*.ply
+*.png
+**/*.png
+**/*.gif
+**/.ply
+**/.vtu
+**/.png
+**/**/Flume/dataset/*.npz
 
 # Ignore data format analysis directory
-/data_format_analysis
+./data_format_analysis
 
 
