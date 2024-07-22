@@ -5,7 +5,7 @@ python3 -m pip install --upgrade pip
 python3 -m pip install taichi==1.7.1
 python3 -m pip install imageio
 python3 -m pip install ffmpeg
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r ../requirements.txt
 
 # Check if numpy is installed and its version specific for the wave flume simulation
 NUMPY_VERSION=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null)
