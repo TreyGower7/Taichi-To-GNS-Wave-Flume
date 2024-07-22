@@ -1062,19 +1062,32 @@ def save_simulation():
     mat_data_tmp = np.where(material_numpy == material_id_dict_mpm["Water"], material_id_dict_gns["Water"] + (0 * material_numpy), material_numpy)
 
     mat_data = np.asarray(mat_data_tmp, dtype=object)
-    pos_data = np.stack(data_to_save, axis=0) / grid_length
+    pos_data = np.stack(data_to_save, axis=0) / grid_length # Scale position data to 1x1x1 domain for GNS
+
+    print("Down-sampling index list: ", idx_sampled.shape)
+
 
     # Perform downsampling for GNS
-    if downsampling:
+    downsampling_style = "poisson-disk"
+    if downsampling_style == "poisson-disk":
+        # Use the idx's to sample the data (i.e. according to Poisson-Disk Sampling, voxel, manual, etv)
+        downsampled_data = pos_data[:, idx_sampled, :]
+        downsampled_mat_data = mat_data[idx_sampled]
+    elif downsampling_style == "stride":
+        # Save a GNS downsampled particle every downampling_ratio
+        downsampled_data = pos_data[:,::downsampling_ratio,:]
         downsampled_mat_data = mat_data[::downsampling_ratio]
-        downsampled_data = pos_data[::downsampling_ratio,::downsampling_ratio,::downsampling_ratio]
-
+    elif downsampling_style == "random":
+        # Randomly sample the data
+        downsampled_data = pos_data[:, np.random.choice(pos_data.shape[1], size=xyz_sampled.size[0], replace=False), :]
+        downsampled_mat_data = mat_data[np.random.choice(mat_data.shape[0], size=xyz_sampled.size[0], replace=False)]
+    else:
+        raise Exception("Downsampling Style Not Supported")
 
     #check version of numpy >= 1.22.0
     # Newer versions of numpy require the dtype to be explicitly set to object, I think, for some python versions
     # Should add a check for the python version as well
     
-    # This Doesnt work with GNS
     if (np.version.version > '1.23.5'):
         print("Using numpy version (>= 1.23.5), may require alternative approach to save npz files (e.g. dtype=object): ", np.version.version)
         pos_data = np.array(np.stack(np.asarray(downsampled_data, dtype=object), axis=0), dtype=object)
@@ -1096,27 +1109,32 @@ def save_simulation():
         
     if data_designation.lower() in ("r", "rollout", "test"):
         # Should clarify the difference in naming between test and rollout
+        print("Saving simulatiomn particle data to: [", file_path, "/test.npz] for testing of surrogate models trained on similar but different data, i.e. [train.npz].")
         output_file_path = os.path.join(file_path, "test.npz")
         np.savez_compressed(f'{file_path}/test.npz', **simulation_data)
+        output_particles_as_vtk = True
+
 
     elif data_designation.lower() in ("t", "train"):
+        print("Saving simulation particle data to: [", file_path, "/train.npz] for training surrogate models.")
         output_file_path = os.path.join(file_path, "train.npz")
         np.savez_compressed(f'{file_path}/train.npz', **simulation_data)
         save_metadata(file_path)
 
     elif data_designation.lower() in ("v", "valid"):
+        print("Saving simulation particle data to: [", file_path, "/valid.npz] for validation of trained and tested surrogate models.")
         output_file_path = os.path.join(file_path, "valid.npz")
         np.savez_compressed(f'{file_path}/valid.npz', **simulation_data) # Proper 
         
     else:
+        "Unspecified data designation, saving to: [",  cwd_path,"/unspecified_sim_data.npz]"
         output_file_path = os.path.join(cwd_path, "unspecified_sim_data.npz")
-        np.savez_compressed("unspecified_sim_data2.npz", **simulation_data)
+        np.savez_compressed(os.path.join(cwd_path, "unspecified_sim_data2.npz"), **simulation_data)
         #np.savez_compressed('simulation_data_kwargs.npz', pos_data=downsampled_data, material_ids=downsampled_mat_data)
         # Save to HDF5
         #with h5py.File(f'{cwd_path}/unspecified_sim_data.h5', 'w') as f:
         #    f.create_dataset('pos_data', data=downsampled_data)
         #    f.create_dataset('material_ids', data=downsampled_mat_data)
-        
     print("Simulation Data Saved to: ", file_path)
 
 # Define a Taichi field to store the result
