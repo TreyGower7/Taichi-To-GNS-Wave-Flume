@@ -1,20 +1,23 @@
 #!/bin/bash
-
 TMP_DIR="./"
 VENV_PATH="${TMP_DIR}/venv"
+CURRENT_DIR=$(pwd)
+#echo $CURRENT_DIR
+
 # Check if virtual environment exists
-if [ ! -d "${VENV_PATH}" ]; then
-  echo "Virtual environment does not exist; Running build_venv_frontera.sh"
-  
-  # Run the script to build the virtual environment
-  if [ -f "./build_venv_frontera.sh" ]; then
-    ./build_venv_frontera.sh
-  else
-    echo "build_venv_frontera.sh not found; Please ensure it is present in the current directory"
-    exit 1
+if [ "$CURRENT_DIR" != "/home/tg458981/work/HPCWork/gns" ]; then
+  if [ ! -d "${VENV_PATH}" ]; then
+    echo "Virtual environment does not exist; Running build_venv_frontera.sh"
+
+    # Run the script to build the virtual environment
+    if [ -f "./build_venv_frontera.sh" ]; then
+      ./build_venv_frontera.sh
+    else
+      echo "build_venv_frontera.sh not found; Please ensure it is present in the current directory"
+      exit 1
+    fi
   fi
 fi
-
 # Activate the virtual environment
 source "${VENV_PATH}/bin/activate"
 
