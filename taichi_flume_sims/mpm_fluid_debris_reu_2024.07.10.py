@@ -14,6 +14,7 @@ import time as T
 from matplotlib import cm
 from pyevtk.hl import pointsToVTK
 import point_cloud_utils as pcu
+import argparse
 # import save_sim as ss # Using the save_simulation() function present in current file instead 
 from Simulation_validation import SolitonWaveValidation
 ti.init(arch=ti.gpu)  # Try to run on GPU
@@ -519,6 +520,19 @@ if ti.static(use_antilocking):
 #class material_models():
 #    def __init__(self) -> None:
 
+def create_parser():
+    parser = argparse.ArgumentParser(description="Specify data type for processing.")
+    
+    parser.add_argument(
+        '--data',
+        type=str,
+        choices=['r', 'rollout', 'test', 't', 'train', 'v', 'valid'],
+        required=False,
+        help='Specify the type of data: r/rollout/test, t/train, or v/valid'
+    )
+    
+    
+    return parser
 
 @ti.func
 def update_material_properties(p):
@@ -1324,8 +1338,13 @@ def render_3D():
     canvas.scene(scene)
 
 #Simulation Prerequisites 
-data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
-# sequence_length = int(input('How many time steps to simulate? --> ')) 
+parser = create_parser()
+args = parser.parse_args()
+if args.data is None:
+    data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
+else:
+    data_designation = args.data# sequence_length = int(input('How many time steps to simulate? --> ')) 
+
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
 

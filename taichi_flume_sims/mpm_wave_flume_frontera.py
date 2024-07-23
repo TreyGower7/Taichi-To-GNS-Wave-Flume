@@ -525,19 +525,13 @@ def create_parser():
     parser = argparse.ArgumentParser(description="Specify data type for processing.")
     
     parser.add_argument(
-        '--data_type',
+        '--data',
         type=str,
         choices=['r', 'rollout', 'test', 't', 'train', 'v', 'valid'],
-        required=True,
+        required=False,
         help='Specify the type of data: r/rollout/test, t/train, or v/valid'
     )
     
-    parser.add_argument(
-        '--file_path',
-        type=str,
-        default=os.getcwd(),
-        help='Specify the file path for saving data. Defaults to current working directory.'
-    )
     
     return parser
 
@@ -1278,10 +1272,11 @@ def save_simulation():
 #Simulation Prerequisites 
 parser = create_parser()
 args = parser.parse_args()
-if args.data_type is None:
+if args.data is None:
     data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
 else:
-    data_designation = args.data_type
+    data_designation = args.data# sequence_length = int(input('How many time steps to simulate? --> ')) 
+
 
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
 fps = 60
