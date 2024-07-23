@@ -14,6 +14,8 @@ import time as T
 from matplotlib import cm
 from pyevtk.hl import pointsToVTK
 import point_cloud_utils as pcu
+import argparse
+
 # import save_sim as ss # Using the save_simulation() function present in current file instead 
 from Simulation_validation import SolitonWaveValidation
 ti.init(arch=ti.gpu)  # Try to run on GPU
@@ -519,6 +521,25 @@ if ti.static(use_antilocking):
 #class material_models():
 #    def __init__(self) -> None:
 
+def create_parser():
+    parser = argparse.ArgumentParser(description="Specify data type for processing.")
+    
+    parser.add_argument(
+        '--data_type',
+        type=str,
+        choices=['r', 'rollout', 'test', 't', 'train', 'v', 'valid'],
+        required=True,
+        help='Specify the type of data: r/rollout/test, t/train, or v/valid'
+    )
+    
+    parser.add_argument(
+        '--file_path',
+        type=str,
+        default=os.getcwd(),
+        help='Specify the file path for saving data. Defaults to current working directory.'
+    )
+    
+    return parser
 
 @ti.func
 def update_material_properties(p):
@@ -1127,7 +1148,7 @@ def save_metadata(file_path):
         "acc_std": acc_std, #[0.0002582944917306106, 0.00029554531667679154]
     }
     
-    print("Cpmstricted simulation metadata: ", metadata)
+    print("Constricted simulation metadata: ", metadata)
     
     # Write metadata to a JSON file
     with open(os.path.join(file_path, 'metadata.json'), 'w') as file:
@@ -1255,7 +1276,13 @@ def save_simulation():
 
 
 #Simulation Prerequisites 
-data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
+parser = create_parser()
+args = parser.parse_args()
+if args.data_type is None:
+    data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
+else:
+    data_designation = args.data_type
+
 # sequence_length = int(input('How many time steps to simulate? --> ')) 
 fps = 60
 sequence_length = 10 * fps # May want to provide an FPS input 
