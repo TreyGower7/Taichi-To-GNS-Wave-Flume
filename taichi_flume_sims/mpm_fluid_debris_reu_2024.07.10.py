@@ -1453,7 +1453,7 @@ for frame in range(sequence_length):
     
     print("\n" + "=" * 30)
     print("     Simulation Details     ")
-    print(f"     ({str(data_designation.capitalize())})     ")
+    print(f"         ({str(data_designation.capitalize())})")
     print("=" * 30)
     if wave_height_expected - 0.2 <= wave_height <= wave_height_expected + 0.1:
         print(f"Frame: {frame}, Saving Frame: {formed_wave_frames}")
