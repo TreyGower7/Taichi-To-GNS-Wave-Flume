@@ -1341,9 +1341,15 @@ def render_3D():
 parser = create_parser()
 args = parser.parse_args()
 if args.data is None:
-    data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> '))
+    data_designation = str(input('What is the output particle data for? Select: Rollout(R), Training(T), Valid(V) [Waiting for user input...] --> ')).lower()
 else:
-    data_designation = args.data# sequence_length = int(input('How many time steps to simulate? --> ')) 
+    data_designation = args.data
+if data_designation in ("r", "rollout", "test"):
+    data_designation = 'Rollout'
+elif data_designation in ("v", "valid"):
+    data_designation = 'Valid'
+elif data_designation in ("t", "train"):
+    data_designation = 'Train'
 
 fps = int(input('How many frames-per-second (FPS) to output? [Waiting for user input...] -->'))
 sequence_length = int(input('How many seconds to run this simulations? [Waiting for user input...] --> ')) * fps # May want to provide an FPS input 
@@ -1447,6 +1453,7 @@ for frame in range(sequence_length):
     
     print("\n" + "=" * 30)
     print("     Simulation Details     ")
+    print(f"     ({str(data_designation.capitalize())})     ")
     print("=" * 30)
     if wave_height_expected - 0.2 <= wave_height <= wave_height_expected + 0.1:
         print(f"Frame: {frame}, Saving Frame: {formed_wave_frames}")
