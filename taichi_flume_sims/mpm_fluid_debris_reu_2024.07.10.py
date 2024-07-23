@@ -1333,8 +1333,7 @@ sequence_length = int(input('How many seconds to run this simulations? [Waiting 
 # NOTE: This can become many GBs large, exceeding the RAM of your computer. TODO: Use a file(s) on disk and perform writes in smaller chunks from the RAM
 x_data_gns= np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32) # float 32 for mac compatibility
 v_data_gns = np.zeros((sequence_length, n_particles, DIMENSIONS), dtype=np.float32)
-wave_numerical_soln = np.zeros((sequence_length, 3), dtype=np.float32) # 1. time 2. corresponding x positional value 3. max y 
-max_wave_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
+#wave_numerical_soln = np.zeros((sequence_length, 3), dtype=np.float32) # 1. time 2. corresponding x positional value 3. max y 
 max_wave_y = -np.inf # Initialize with unmistakable minamal value
 max_wave_ind = 0
 wave_water_condition = (material.to_numpy()[:] == material_id_dict_mpm["Water"]) # Boolean Conditional for water
@@ -1430,7 +1429,7 @@ for frame in range(sequence_length):
     print("\n" + "=" * 30)
     print("     Simulation Details     ")
     print("=" * 30)
-    if wave_height_expected - 0.3 <= wave_height <= wave_height_expected + 0.1:
+    if wave_height_expected - 0.2 <= wave_height <= wave_height_expected + 0.1:
         print(f"Frame: {frame}, Saving Frame: {formed_wave_frames}")
         print(f"Time: {time:.3f}, Time of formed wave: {time_formed:.3f}")
     else:
@@ -1462,22 +1461,22 @@ for frame in range(sequence_length):
             print(f"\nCurrent Wave Height: {wave_height:.3f}(m)")
             print(f"Expected Wave Height: {wave_height_expected:.3f}(m)")
 
-            if wave_height_expected - 0.3 <= wave_height <= wave_height_expected + 0.1:
+            if wave_height_expected - 0.2 <= wave_height <= wave_height_expected + 0.1:
                 if not wave_formed:
                     wave_formed = True
-                    wave_numerical_soln = np.zeros((abs(sequence_length-frame), 3), dtype=np.float32)
+                    #wave_numerical_soln = np.zeros((abs(sequence_length-frame), 3), dtype=np.float32)
                     print("\n" + "*" * 30)
                     print("Wave is fully formed.")
-                    print("Starting to save wave data.")
+                    #print("Starting to save wave data.")
                     print("*" * 30)
 
                 if wave_formed:
                     time_formed += dt
-                    wave_numerical_soln[formed_wave_frames, 0] = time_formed  # Time 
-                    wave_numerical_soln[formed_wave_frames, 1] = x_np[max_wave_ind, 0]  # Save x position of max water particle value
-                    wave_numerical_soln[formed_wave_frames, 2] = wave_height  # Wave Amplitude
+                    #wave_numerical_soln[formed_wave_frames, 0] = time_formed  # Time 
+                    #wave_numerical_soln[formed_wave_frames, 1] = x_np[max_wave_ind, 0]  # Save x position of max water particle value
+                    #wave_numerical_soln[formed_wave_frames, 2] = wave_height  # Wave Amplitude
                     formed_wave_frames += 1
-                print("\n...Saving Wave Data...")
+                #print("\n...Saving Wave Data...")
 
             else:
                 print("\nWave height not within expected range.")
@@ -1790,10 +1789,6 @@ if frame_paths:
 
 # Prep for GNS input
 save_simulation()
-
-# Validation of simulation data
-wave_validator = SolitonWaveValidation(H=wave_height_expected, h = max_water_depth_tsunami)
-wave_validator.validate_simulation(wave_numerical_soln)
 
 
 #if using save_sim.py script
