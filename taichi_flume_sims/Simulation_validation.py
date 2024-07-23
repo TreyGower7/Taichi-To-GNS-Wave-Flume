@@ -3,12 +3,31 @@ import matplotlib.pyplot as plt
 
 
 g = 9.80665  # Gravitational acceleration taken to be positive downward
+data_path = "./Flume/dataset/train.npz"
 
 class SolitonWaveValidation:
     def __init__(self, H, h):
         self.H = H
         self.h = h
 
+    def load_data(self):
+        """Load data stored in npz format.
+
+        The file format for Python 3.9 or less supports ragged arrays and Python 3.10
+        requires a structured array. This function supports both formats.
+
+        Args:
+            path (str): Path to npz file.
+
+        Returns:
+            data (list): List of tuples of the form (positions, particle_type).
+        """
+        with np.load(data_path, allow_pickle=True) as data_file:
+            if 'gns_data' in data_file:
+                data = data_file['gns_data']
+            else:
+                data = [item for _, item in data_file.items()]
+        return data
     def analytical_soliton(self, x, t):
         """ Analytical solution to non-periodic soliton wave for constant depth from:
             https://agupubs.onlinelibrary.wiley.com/doi/epdf/10.1029/2008JC004932
@@ -87,23 +106,28 @@ class SolitonWaveValidation:
         print(f"Mean error: {np.mean(error):.6f}")
         print(f"Standard deviation of error: {np.std(error):.6f}")
 
-    def validate_simulation(self, wave_numerical_soln):
-        """
-        Main Function for producing numeric vs analytic graphs
-        """
-        t = wave_numerical_soln[:, 0]
-        x = wave_numerical_soln[:, 1]
-        y_numerical = wave_numerical_soln[:, 2]
 
-        # Generate time and space points
-        ta = np.linspace(0, 10, 10)  # Time points (s)
-        xa = np.linspace(0, 90, 1000)  # Spatial points (m)
-        y_analytical = np.array([self.analytical_soliton(xa, ti) for ti in ta]).T
+    
+def validate():
+    """
+    Main Function for producing numeric vs analytic graphs
+    """
+    wavevalidator = SolitonWaveValidation
+    wave_numerical_soln = wavevalidator.load_data()
+    t = wave_numerical_soln[:, 0]
+    x = wave_numerical_soln[:, 1]
+    y_numerical = wave_numerical_soln[:, 2]
 
-       
-        self.plot_free_surface(xa, ta, y_analytical, "Analytical") # Graph Free Surface values
-        #self.plot_free_surface(x, t, y_numerical, "Numerical") # Graph Free Surface values
+    # Generate time and space points
+    ta = np.linspace(0, 10, 10)  # Time points (s)
+    xa = np.linspace(0, 90, 1000)  # Spatial points (m)
+    y_analytical = np.array([wavevalidator.analytical_soliton(xa, ti) for ti in ta]).T
 
-        self.free_surface_error(t, y_analytical, y_numerical)
+    
+    wavevalidator.plot_free_surface(xa, ta, y_analytical, "Analytical") # Graph Free Surface values
+    #wavevalidator.plot_free_surface(x, t, y_numerical, "Numerical") # Graph Free Surface values
 
-        
+    wavevalidator.free_surface_error(t, y_analytical, y_numerical)
+    
+if __name__ == "__validate__":
+    validate()
