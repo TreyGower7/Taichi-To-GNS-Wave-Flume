@@ -61,7 +61,7 @@ fi
 #read -p "Enter the number of training steps for the GNS model (e.g 10): " n_steps
 
 # Run the python command
-python3 -m gns.train --data_path=${DATA_PATH} --model_path=${MODEL_PATH} --ntraining_steps=1000000
+python3 -m gns.train --data_path=${DATA_PATH} --model_path=${MODEL_PATH} --ntraining_steps=1000000 --n_gpus=4 --ntraining_steps=50000
 
 python3 -m gns.train --mode="rollout" --data_path=${DATA_PATH} --model_path=${MODEL_PATH} --output_path=${ROLLOUT_PATH} --model_file="model-100000.pt" --train_state_file="train_state-100000.pt"
 
