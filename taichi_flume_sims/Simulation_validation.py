@@ -39,14 +39,18 @@ def load_data():
     # Wave Particle Conditions
     water_cond = (material_ids == 5)[0] # Ensure Water Particle
     threshold_cond = y_values >= base_y # Ensure Wave is fully formed numerical soln
-    x_cond = x_values >= 15
-    wave_elevation_mask = water_cond & threshold_cond & x_cond
+    wave_elevation_mask = water_cond & threshold_cond 
     y_filtered = y_values[wave_elevation_mask]
     x_filtered = x_values[wave_elevation_mask]
     #print(np.min(y_values))
     #print(np.min(y_filtered))
    
     wave_values = abs(y_filtered - base_y)
+    # TODO:
+    # Filter the maximal value for each wave to get the top most particles at each x positions
+    # Save the x position of each top most particle for each wave along the surface of the water
+    # Filter Duplicates to ensure plotting wave at each timestep
+
     #print(np.max(wave_values))
     print(wave_values.size)
     
