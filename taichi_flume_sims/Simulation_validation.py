@@ -1,11 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+from scipy.signal import find_peaks
+from scipy.interpolate import interp1d
 
 g = 9.80665  # Gravitational acceleration taken to be positive downward
 data_path = "/Users/treygower/code-REU/Physics-Informed-ML/Flume/dataset/train.npz"
 H = 1.3 # Amplitude Expected
-h = 2.7 # Water Depth Tsunami
+h = 2 # Water Depth Tsunami
 
 def load_data():
     """Load data stored in npz format.
@@ -27,22 +28,37 @@ def load_data():
     
     particles = data[0][0]
     material_ids = data[0][1]
-
+    
+    base_y = np.max(particles[0, :, 1]) * 100 # Gets Baseline y value      
+    
     # Filter water particles
-    water_ind = np.where(material_ids == 5)[0]  # indices of water particles
-    water_particles = particles[:, water_ind, :]  # water particles across all steps
+    #wave_threshold =  # Particles where the wave height is greater than 1m above baseline (.029-.0194)
 
-    # Filter wave particles 
-    #wave_ind = water_particles[:, :, 1] > 0.019  # boolean mask for wave particles
-    #wave_particles = water_particles[wave_ind]  # apply mask to get wave particles
-    wave_ind = water_particles[:, :, 1] > .0019  # boolean mask for wave particles
-    wave_particles = water_particles[wave_ind]  # apply mask to get wave particles
-    #print(water_particles)
-    timesteps = len(water_particles[:,0])
+    y_values = particles[:, :, 1] * 100 # y-values are in second dimension
+    x_values = particles[:, :, 0] * 100
+    # Wave Particle Conditions
+    water_cond = (material_ids == 5)[0] # Ensure Water Particle
+    threshold_cond = y_values >= base_y # Ensure Wave is fully formed numerical soln
+    x_cond = x_values >= 15
+    wave_elevation_mask = water_cond & threshold_cond & x_cond
+    y_filtered = y_values[wave_elevation_mask]
+    x_filtered = x_values[wave_elevation_mask]
+    #print(np.min(y_values))
+    #print(np.min(y_filtered))
+   
+    wave_values = abs(y_filtered - base_y)
+    #print(np.max(wave_values))
+    print(wave_values.size)
+    
+    # Find peaks in the data
+    peaks, _ = find_peaks(wave_values, distance=10)  # Adjust distance as needed
 
-    print("Water particles shape:", water_particles.shape)
-    print("Wave particles shape:", wave_particles.shape)
-    return wave_particles, timesteps
+    downsampled_wave = wave_values[peaks]
+
+    print(downsampled_wave.size)
+    
+
+    return downsampled_wave[::100]
 
 
 def analytical_soliton(x, t):
@@ -52,6 +68,7 @@ def analytical_soliton(x, t):
         Args:
             x: Horizontal position in the flume
             t: Time step
+
         Other Vars:
             H: Wave height (Amplitude)
             h: Water depth
@@ -61,9 +78,9 @@ def analytical_soliton(x, t):
     #c = np.sqrt( g * ( 1 + self.H / self.h ) )   # Wave speed for shallow water
 
     Ks = ( 1 / h ) * np.sqrt( ( 3 * H ) / ( 4 * h ) )
-    return H * np.cosh( Ks * ( x - c * t ) ) ** -2 # Using np.cosh^-2 since cosh = 1/sech
+    return (H * np.cosh( Ks * ( x - c * t ) ) ** -2) # Using np.cosh^-2 since cosh = 1/sech
 
-def plot_free_surface(x, t, y, type_wave):
+def plot_free_surface(x, t, y, y_numeric):
     """
     Plot the surface elevations from the piston soliton wave in the flume's body of water.
 
@@ -74,19 +91,20 @@ def plot_free_surface(x, t, y, type_wave):
     """
     plt.figure(figsize=(12, 8))
     num_lines = len(t)
-
-    if type_wave == "Analytical":
-        cmap = plt.get_cmap('viridis')
-    else:
-        cmap_num = plt.get_cmap('viridis').reversed
+  
+    cmap = plt.get_cmap('viridis')
+    cmap_numeric = plt.get_cmap('viridis').reversed()
 
     for i, ti in enumerate(t):
         color = cmap(i / (num_lines - 1))
-        plt.plot(x, y[:, i], color=color, label=f't = {ti:.2f} s', linewidth=2)
+        color_numeric = cmap_numeric(i / (num_lines - 1))
+        plt.plot(x, y, c=color, label=f't = {ti:.2f} s', linewidth=2)
+        plt.plot(x, y_numeric, c=color_numeric, label=f't = {ti:.2f} s', linewidth=2)
 
+    plt.xlim([30,60])
     plt.xlabel('Position (m)', fontsize=12)
-    plt.ylabel('Wave Elevation (m)', fontsize=12)
-    plt.title(f'{type_wave} Surface Elevation for a Soliton Wave', fontsize=14)
+    plt.ylabel('Wave Elevation (Amplitude)', fontsize=12)
+    plt.title(f'Analytical vs numerical Surface Elevation for a Soliton Wave', fontsize=14)
     plt.legend(fontsize=10, loc='upper left', bbox_to_anchor=(1, 1))
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
@@ -124,18 +142,17 @@ def free_surface_error(t, y_analytical, y_numerical):
     print(f"Standard deviation of error: {np.std(error):.6f}")
 
 
-    
 
-y_numerical,timesteps = load_data()
+y_numerical = load_data()
 t = np.linspace(0, 10, 10)
-x = np.linspace(0, 90, 1000)
+x = np.linspace(20, 90, y_numerical.size)
 
 print('Computing Analytical...')
 y_analytical = np.array([analytical_soliton(x, ti) for ti in t]).T
 
 print('Plotting...')
-plot_free_surface(x, t, y_analytical, "Analytical") # Graph Free Surface values
-#wavevalidator.plot_free_surface(x, t, y_numerical, "Numerical") # Graph Free Surface values
+plot_free_surface(x, t, y_analytical, y_numerical) # Graph Free Surface values
+#plot_free_surface(x_values, t, y_numerical, "Numerical") # Graph Free Surface values
 
-free_surface_error(t, y_analytical, y_numerical)
+#free_surface_error(t, y_analytical, y_numerical)
 

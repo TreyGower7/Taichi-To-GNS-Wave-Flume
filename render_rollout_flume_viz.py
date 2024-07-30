@@ -27,7 +27,7 @@ TYPE_TO_COLOR = {
     8: "cyan"  # Wave Height Viz.
 }
 #wave_threshold = .0295 # Particles where the wave height is greater than 1m above baseline
-wave_threshold = .001 # Particles where the wave height is greater than 1m above baseline
+#wave_threshold = .001 # Particles where the wave height is greater than 1m above baseline
 
 
 class Render():
@@ -92,7 +92,7 @@ class Render():
         color_mask = []
         # Perform wave threshold check
         y_values = self.trajectory["ground_truth_rollout"][:, :, 1]  # y-values are in second dimension
-        max_base_y = np.max(self.trajectory["ground_truth_rollout"][0, :, 1]) # Gets Baseline y value before wave might change how I get this in main loop.        
+        max_base_y = np.max(self.trajectory["ground_truth_rollout"][0, :, 1]) # Gets Baseline y value
         wave_particles = y_values - max_base_y 
         #max_wave_heights = np.max(y_values) - max_base_y
         #print(wave_particles)

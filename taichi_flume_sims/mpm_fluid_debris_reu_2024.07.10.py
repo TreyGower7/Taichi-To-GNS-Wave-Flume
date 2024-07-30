@@ -1484,7 +1484,7 @@ for frame in range(sequence_length):
             max_wave_ind = np.argmax(x_np[:, 1][wave_water_condition])  # Index of max wave value
             max_wave_y = x_np[max_wave_ind, 1]  # Max water particle Value for each time step based on boolean indexing
             wave_height = max_wave_y - max_base_y
-
+            
             print(f"\nCurrent Wave Height: {wave_height:.3f}(m)")
             print(f"Expected Wave Height: {wave_height_expected:.3f}(m)")
 
@@ -1494,16 +1494,16 @@ for frame in range(sequence_length):
                     #wave_numerical_soln = np.zeros((abs(sequence_length-frame), 3), dtype=np.float32) #May run out of indices this way
                     print("\n" + "*" * 30)
                     print("Wave is fully formed.")
-                    print("Starting to save wave data.")
+                    #print("Starting to save wave data.")
                     print("*" * 30)
 
                 if wave_formed:
                     time_formed += dt
                     wave_numerical_soln[formed_wave_frames, 0] = time_formed  # Time 
-                    wave_numerical_soln[formed_wave_frames, 1] = x_np[max_wave_ind, 0]  # Save x position of max water particle value
-                    wave_numerical_soln[formed_wave_frames, 2] = wave_height  # Wave Amplitude
+                    #wave_numerical_soln[formed_wave_frames, 1] = x_np[max_wave_ind, 0]  # Save x position of max water particle value
+                    #wave_numerical_soln[formed_wave_frames, 2] = wave_height  # Wave Amplitude
                     formed_wave_frames += 1
-                print("\n...Saving Wave Data...")
+                #print("\n...Saving Wave Data...")
 
             else:
                 print("\nWave height not within expected range.")
@@ -1815,6 +1815,17 @@ if frame_paths:
 
 
 # Prep for GNS input
+
+#y_values = x_np[:, :, 1]  # y-values are in second dimension
+#wave_particles = y_values - max_base_y 
+#max_wave_heights = np.max(y_values) - max_base_y
+#wave_threshold = .0295 # Particles where the wave height is greater than 1m above baseline
+#wave_particles_ind = np.where(y_values > max_base_y)
+
+#threshold_mask = y_values >= wave_threshold
+#wave_elevation_mask = wave_water_condition & threshold_mask
+# Extracting wave particles
+#wave_numerical_soln = y_values[wave_elevation_mask]
 save_simulation()
 
 # Validation of simulation data
