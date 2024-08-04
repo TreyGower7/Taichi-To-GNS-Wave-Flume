@@ -337,7 +337,7 @@ n_particles_water = xyz_water.shape[0]
 print("Number of Water Particles: ", n_particles_water)
 
 debris_dimensions = 1.0 * np.array([0.5, 0.05, 0.1]) # Debris dimensions in meters
-debris_array = np.array([8, 1, 1]) # Number of debris in the debris-field in each direction
+debris_array = np.array([200, 1, 1]) # Number of debris in the debris-field in each direction
 debris_spacing_gap = 5 * np.array([dx, dx, dx]) # Spacing between faces of debris in the debris-field, 
 debris_field_downstream_edge = 43.8 # Downstream edge of the debris field in meters, from Mascerenas 2022 experiments 
 debris_water_gap = dx # Gap between water and debris in, Y direction, to avoid overlap/stickiness

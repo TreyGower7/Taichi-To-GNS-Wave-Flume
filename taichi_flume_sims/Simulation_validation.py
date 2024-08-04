@@ -2,11 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 from scipy.interpolate import interp1d
+from scipy import fft
 
 g = 9.80665  # Gravitational acceleration taken to be positive downward
 data_path = "/Users/treygower/code-REU/Physics-Informed-ML/Flume/dataset/train.npz"
 H = 1.3 # Amplitude Expected
 h = 2 # Water Depth Tsunami
+
 
 def load_data():
     """Load data stored in npz format.
@@ -20,49 +22,44 @@ def load_data():
     Returns:
         data (list): List of tuples of the form (positions, particle_type).
     """
+
     with np.load(data_path, allow_pickle=True) as data_file:
         if 'gns_data' in data_file:
             data = data_file['gns_data']
         else:
             data = [item for _, item in data_file.items()]
     
-    particles = data[0][0]
+    particles = data[0][0] 
     material_ids = data[0][1]
     
-    base_y = np.max(particles[0, :, 1]) * 100 # Gets Baseline y value      
-    
-    # Filter water particles
-    #wave_threshold =  # Particles where the wave height is greater than 1m above baseline (.029-.0194)
+    base_y = np.max(particles[0, :, 1]) * 100# Gets Baseline max y value for water height
+    y_values = particles[:, :, 1] * 100 
+    x_values = particles[:, :, 1] * 100 
+    t_steps = particles.shape[0]
+    #x_sorted = sort_x(x_vals)
+    y_values = np.stack(y_values)
+    x_values = np.stack(x_values)
 
-    y_values = particles[:, :, 1] * 100 # y-values are in second dimension
-    x_values = particles[:, :, 0] * 100
-    # Wave Particle Conditions
-    water_cond = (material_ids == 5)[0] # Ensure Water Particle
-    threshold_cond = y_values >= base_y # Ensure Wave is fully formed numerical soln
-    wave_elevation_mask = water_cond & threshold_cond 
-    y_filtered = y_values[wave_elevation_mask]
-    x_filtered = x_values[wave_elevation_mask]
-    #print(np.min(y_values))
-    #print(np.min(y_filtered))
-   
-    wave_values = abs(y_filtered - base_y)
-    # TODO:
-    # Filter the maximal value for each wave to get the top most particles at each x positions
-    # Save the x position of each top most particle for each wave along the surface of the water
-    # Filter Duplicates to ensure plotting wave at each timestep
+    y_max = []
+    x_max = []
+    time = []
+    dt = 0.016666666666666666 # hardcode dt in from metadata
 
-    #print(np.max(wave_values))
-    print(wave_values.size)
-    
-    # Find peaks in the data
-    peaks, _ = find_peaks(wave_values, distance=10)  # Adjust distance as needed
+    for t in range(0, t_steps, 30): # not necessary to get each time step
+        for i in range(len(y_values[t])):
+            if np.max(y_values[t,i]) > base_y:
+                y_max.append(y_values[t,i]-base_y)
+                x_max.append(x_values[t,i])
 
-    downsampled_wave = wave_values[peaks]
+        time.append(t*dt)
+    #interp_func = interp1d(x_max, y_max)
+    #y_smooth = interp_func(y_max)
+    #print(y_smooth)
 
-    print(downsampled_wave.size)
-    
-
-    return downsampled_wave[::100]
+    wave_numerical = (time,x_max,y_max)
+    #print(wave_numerical)
+    return wave_numerical
+    #print(np.max(y_max-base_y)
 
 
 def analytical_soliton(x, t):
@@ -84,7 +81,7 @@ def analytical_soliton(x, t):
     Ks = ( 1 / h ) * np.sqrt( ( 3 * H ) / ( 4 * h ) )
     return (H * np.cosh( Ks * ( x - c * t ) ) ** -2) # Using np.cosh^-2 since cosh = 1/sech
 
-def plot_free_surface(x, t, y, y_numeric):
+def plot_free_surface(x, t, y, wave_numerical):
     """
     Plot the surface elevations from the piston soliton wave in the flume's body of water.
 
@@ -93,7 +90,7 @@ def plot_free_surface(x, t, y, y_numeric):
         t: Time points (s)
         y: Analytical solution values at each spatial and time point (m)
     """
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(10, 6))
     num_lines = len(t)
   
     cmap = plt.get_cmap('viridis')
@@ -102,10 +99,10 @@ def plot_free_surface(x, t, y, y_numeric):
     for i, ti in enumerate(t):
         color = cmap(i / (num_lines - 1))
         color_numeric = cmap_numeric(i / (num_lines - 1))
-        plt.plot(x, y, c=color, label=f't = {ti:.2f} s', linewidth=2)
-        plt.plot(x, y_numeric, c=color_numeric, label=f't = {ti:.2f} s', linewidth=2)
-
-    plt.xlim([30,60])
+        plt.plot(x, y[:,i], c=color, label=f't = {ti:.2f} s', linewidth=2)
+    
+    plt.plot(x, wave_numerical[2], c=color_numeric, label=f't = {ti:.2f} s', linewidth=2)
+    plt.xlim([0,np.max(x)])
     plt.xlabel('Position (m)', fontsize=12)
     plt.ylabel('Wave Elevation (Amplitude)', fontsize=12)
     plt.title(f'Analytical vs numerical Surface Elevation for a Soliton Wave', fontsize=14)
@@ -147,16 +144,15 @@ def free_surface_error(t, y_analytical, y_numerical):
 
 
 
-y_numerical = load_data()
+wave_numerical = load_data()
 t = np.linspace(0, 10, 10)
-x = np.linspace(20, 90, y_numerical.size)
+x = np.linspace(0, 90, len(wave_numerical[2]))
 
-print('Computing Analytical...')
+#print('Computing Analytical...')
 y_analytical = np.array([analytical_soliton(x, ti) for ti in t]).T
 
-print('Plotting...')
-plot_free_surface(x, t, y_analytical, y_numerical) # Graph Free Surface values
+#print('Plotting...')
+plot_free_surface(x, t, y_analytical, wave_numerical) # Graph Free Surface values
 #plot_free_surface(x_values, t, y_numerical, "Numerical") # Graph Free Surface values
 
-#free_surface_error(t, y_analytical, y_numerical)
-
+free_surface_error(t, y_analytical, wave_numerical[2])
