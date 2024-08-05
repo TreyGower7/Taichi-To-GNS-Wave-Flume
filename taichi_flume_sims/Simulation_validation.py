@@ -6,8 +6,8 @@ from scipy import fft
 
 g = 9.80665  # Gravitational acceleration taken to be positive downward
 data_path = "/Users/treygower/code-REU/Physics-Informed-ML/Flume/dataset/train.npz"
-H = 1.3 # Amplitude Expected
-h = 2 # Water Depth Tsunami
+H = 1.2 # Amplitude Expected
+h = 1.85 # Water Depth Tsunami
 
 
 def load_data():
@@ -32,9 +32,9 @@ def load_data():
     particles = data[0][0] 
     material_ids = data[0][1]
     
-    base_y = np.max(particles[0, :, 1]) * 100# Gets Baseline max y value for water height
-    y_values = particles[:, :, 1] * 100 
-    x_values = particles[:, :, 1] * 100 
+    base_y = np.max(particles[0, :, 1]) * 102.4 # Gets Baseline max y value for water height
+    y_values = particles[:, :, 1] * 102.4 
+    x_values = particles[:, :, 0] * 102.4 
     t_steps = particles.shape[0]
     #x_sorted = sort_x(x_vals)
     y_values = np.stack(y_values)
@@ -44,22 +44,29 @@ def load_data():
     x_max = []
     time = []
     dt = 0.016666666666666666 # hardcode dt in from metadata
-
+    fps = 60
+    # counter = 0 
     for t in range(0, t_steps, 30): # not necessary to get each time step
-        for i in range(len(y_values[t])):
-            if np.max(y_values[t,i]) > base_y:
-                y_max.append(y_values[t,i]-base_y)
-                x_max.append(x_values[t,i])
-
-        time.append(t*dt)
+        tc = t 
+        for i in range(len(y_values[tc])):
+            if np.max(y_values[tc,i]) > base_y:
+                y_max.append(y_values[tc,i]-base_y)
+                x_max.append(x_values[tc,i])
+   
+        time.append(t/fps)
+    time = np.asarray(time)
+    y_max = np.asarray(y_max)
+    x_max = np.asarray(x_max)
     #interp_func = interp1d(x_max, y_max)
     #y_smooth = interp_func(y_max)
     #print(y_smooth)
+    sorted_indices = np.argsort(x_max)
 
+    print(sorted_indices)
+    #time_sorted = time[sorted_indices]
     wave_numerical = (time,x_max,y_max)
-    #print(wave_numerical)
+
     return wave_numerical
-    #print(np.max(y_max-base_y)
 
 
 def analytical_soliton(x, t):
@@ -106,12 +113,12 @@ def plot_free_surface(x, t, y, wave_numerical):
     plt.xlabel('Position (m)', fontsize=12)
     plt.ylabel('Wave Elevation (Amplitude)', fontsize=12)
     plt.title(f'Analytical vs numerical Surface Elevation for a Soliton Wave', fontsize=14)
-    plt.legend(fontsize=10, loc='upper left', bbox_to_anchor=(1, 1))
+    #plt.legend(fontsize=10, loc='upper left', bbox_to_anchor=(1, 1))
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
     plt.show()
 
-def free_surface_error(t, y_analytical, y_numerical):
+def free_surface_error(x, y_analytical, y_numerical):
     """
     Calculate and plot the absolute error between numerical and analytical solutions.
 
@@ -120,10 +127,12 @@ def free_surface_error(t, y_analytical, y_numerical):
     y_analytical (np.ndarray): Analytical solution values at each time point.
     y_numerical (np.ndarray): Numerical solution values at each time point.
     """
-    error = np.abs(y_numerical - y_analytical)
-    
+    numerical_reshaped = y_numerical[:, np.newaxis]  # Shape becomes (5968, 1)
+    error = numerical_reshaped - y_analytical  # Result will be (5968, 10)
+    # Analyze the difference for each time step
+
     plt.figure(figsize=(12, 6))
-    plt.plot(t, error, label='Absolute Error', color='g', linewidth=2)
+    plt.plot(x, error, label='Absolute Error', color='g', linewidth=2)
     
     plt.xlabel('Time (s)', fontsize=12)
     plt.ylabel('Absolute Error (m)', fontsize=12)
@@ -145,14 +154,13 @@ def free_surface_error(t, y_analytical, y_numerical):
 
 
 wave_numerical = load_data()
-t = np.linspace(0, 10, 10)
-x = np.linspace(0, 90, len(wave_numerical[2]))
+t = wave_numerical[0] #np.linspace(0, 10, 30)
+x = wave_numerical[1]#np.linspace(0, 90, len(wave_numerical[2]))
 
 #print('Computing Analytical...')
 y_analytical = np.array([analytical_soliton(x, ti) for ti in t]).T
 
 #print('Plotting...')
 plot_free_surface(x, t, y_analytical, wave_numerical) # Graph Free Surface values
-#plot_free_surface(x_values, t, y_numerical, "Numerical") # Graph Free Surface values
 
-free_surface_error(t, y_analytical, wave_numerical[2])
+#free_surface_error(x, y_analytical, wave_numerical[2])
