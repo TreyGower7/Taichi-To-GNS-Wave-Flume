@@ -6,12 +6,14 @@ from scipy import fft
 
 g = 9.80665  # Gravitational acceleration taken to be positive downward
 data_path = "/Users/treygower/code-REU/Physics-Informed-ML/Flume/dataset/train.npz"
-H = 1.2 # Amplitude Expected
+data_path = "../Flume/dataset/train.npz"
+data_path = "/home/justinbonus/SimCenter/Taichi-To-GNS-Wave-Flume/Flume/dataset/train.npz"
+H = 1.0 # Amplitude Expected
 h = 1.85 # Water Depth Tsunami
 
 
 def load_data():
-    """Load data stored in npz format.
+    """Load data stored in npz format
 
     The file format for Python 3.9 or less supports ragged arrays and Python 3.10
     requires a structured array. This function supports both formats.
@@ -33,6 +35,7 @@ def load_data():
     material_ids = data[0][1]
     
     base_y = np.max(particles[0, :, 1]) * 102.4 # Gets Baseline max y value for water height
+    base_y = 1.85
     y_values = particles[:, :, 1] * 102.4 
     x_values = particles[:, :, 0] * 102.4 
     t_steps = particles.shape[0]
@@ -40,31 +43,50 @@ def load_data():
     y_values = np.stack(y_values)
     x_values = np.stack(x_values)
 
-    y_max = []
-    x_max = []
+    x_max_all = []
+    y_max_all = []
+    
     time = []
     dt = 0.016666666666666666 # hardcode dt in from metadata
     fps = 60
     # counter = 0 
+    print("T_Steps: ", t_steps)
     for t in range(0, t_steps, 30): # not necessary to get each time step
         tc = t 
+        x_max = []
+        y_max = []
         for i in range(len(y_values[tc])):
-            if np.max(y_values[tc,i]) > base_y:
-                y_max.append(y_values[tc,i]-base_y)
+            if np.max(y_values[tc,i]) >= base_y:
+                dx = 0.05
+                offset = 3 * dx
+                y_max.append(y_values[tc,i]-base_y - offset)
                 x_max.append(x_values[tc,i])
    
+        x_max = np.asarray(x_max)
+        y_max = np.asarray(y_max)
+        sorted_indices = np.argsort(x_max)
+
+        x_max_all.append(x_max[sorted_indices])
+        y_max_all.append(y_max[sorted_indices])
         time.append(t/fps)
+        
     time = np.asarray(time)
-    y_max = np.asarray(y_max)
-    x_max = np.asarray(x_max)
+
     #interp_func = interp1d(x_max, y_max)
     #y_smooth = interp_func(y_max)
     #print(y_smooth)
-    sorted_indices = np.argsort(x_max)
 
     print(sorted_indices)
-    #time_sorted = time[sorted_indices]
-    wave_numerical = (time,x_max,y_max)
+
+    #x_max_sorted = x_max[sorted_indices]
+    #y_max_sorted = y_max[sorted_indices]
+    print("Time Sorted: ", time)
+    print("X Sorted: ", x_max_all[0])  
+    print("Y Sorted: ", y_max_all[0])
+    #print("Time Sorted: ", time_sorted)
+    #print("X Sorted: ", x_max_sorted)
+    #print("Y Sorted: ", y_max_sorted)
+    wave_numerical = (time,x_max_all,y_max_all)
 
     return wave_numerical
 
@@ -88,7 +110,38 @@ def analytical_soliton(x, t):
     Ks = ( 1 / h ) * np.sqrt( ( 3 * H ) / ( 4 * h ) )
     return (H * np.cosh( Ks * ( x - c * t ) ) ** -2) # Using np.cosh^-2 since cosh = 1/sech
 
-def plot_free_surface(x, t, y, wave_numerical):
+
+def hl_envelopes_idx(s, dmin=1, dmax=1, split=False):
+    """
+    Input :
+    s: 1d-array, data signal from which to extract high and low envelopes
+    dmin, dmax: int, optional, size of chunks, use this if the size of the input signal is too big
+    split: bool, optional, if True, split the signal in half along its mean, might help to generate the envelope in some cases
+    Output :
+    lmin,lmax : high/low envelope idx of input signal s
+    """
+
+    # locals min      
+    lmin = (np.diff(np.sign(np.diff(s))) > 0).nonzero()[0] + 1 
+    # locals max
+    lmax = (np.diff(np.sign(np.diff(s))) < 0).nonzero()[0] + 1 
+    
+    if split:
+        # s_mid is zero if s centered around x-axis or more generally mean of signal
+        s_mid = np.mean(s) 
+        # pre-sorting of locals min based on relative position with respect to s_mid 
+        lmin = lmin[s[lmin]<s_mid]
+        # pre-sorting of local max based on relative position with respect to s_mid 
+        lmax = lmax[s[lmax]>s_mid]
+
+    # global min of dmin-chunks of locals min 
+    lmin = lmin[[i+np.argmin(s[lmin[i:i+dmin]]) for i in range(0,len(lmin),dmin)]]
+    # global max of dmax-chunks of locals max 
+    lmax = lmax[[i+np.argmax(s[lmax[i:i+dmax]]) for i in range(0,len(lmax),dmax)]]
+    
+    return lmin,lmax
+
+def plot_free_surface(t, x, y, wave_numerical):
     """
     Plot the surface elevations from the piston soliton wave in the flume's body of water.
 
@@ -97,6 +150,11 @@ def plot_free_surface(x, t, y, wave_numerical):
         t: Time points (s)
         y: Analytical solution values at each spatial and time point (m)
     """
+    
+    from scipy.signal import savgol_filter
+    
+    # print("Min x", min(wave_numerical[1][0]))
+    
     plt.figure(figsize=(10, 6))
     num_lines = len(t)
   
@@ -104,16 +162,39 @@ def plot_free_surface(x, t, y, wave_numerical):
     cmap_numeric = plt.get_cmap('viridis').reversed()
 
     for i, ti in enumerate(t):
+        
+        
+        
         color = cmap(i / (num_lines - 1))
         color_numeric = cmap_numeric(i / (num_lines - 1))
-        plt.plot(x, y[:,i], c=color, label=f't = {ti:.2f} s', linewidth=2)
-    
-    plt.plot(x, wave_numerical[2], c=color_numeric, label=f't = {ti:.2f} s', linewidth=2)
-    plt.xlim([0,np.max(x)])
-    plt.xlabel('Position (m)', fontsize=12)
-    plt.ylabel('Wave Elevation (Amplitude)', fontsize=12)
-    plt.title(f'Analytical vs numerical Surface Elevation for a Soliton Wave', fontsize=14)
-    #plt.legend(fontsize=10, loc='upper left', bbox_to_anchor=(1, 1))
+        plt.plot(x, y[:,i], c=color, linewidth=1.5, linestyle='-')
+        
+        
+        window = 5
+        polyorder = 2
+        if (wave_numerical[2][i].shape[0] >= window):
+            dmax_window = 4
+            lmin, lmax = hl_envelopes_idx(wave_numerical[2][i], dmin=1, dmax=dmax_window, split=False)
+            y_numerical_filtered = wave_numerical[2][i][lmax]
+            x_numerical_filtered = wave_numerical[1][i][lmax]
+            # y_numerical_filtered = savgol_filter(y_numerical_filtered, 5, polyorder)
+        else:
+           y_numerical_filtered = wave_numerical[2][i]
+           x_numerical_filtered = wave_numerical[1][i]
+
+        dx = 0.05        
+        taichi_offset = 3 * dx
+        # if i % 2 == 0:
+        plt.plot(x_numerical_filtered - taichi_offset, y_numerical_filtered,  c=color, label=f't = {ti:.2f} s', linewidth=1.5)
+        # else:
+            # plt.plot(x_numerical_filtered - taichi_offset, y_numerical_filtered,  c=color, linewidth=1.5)
+
+
+    plt.xlim([0,np.max(x) / 2])
+    plt.xlabel('Streamwise Position in Flume (m)', fontsize=12)
+    plt.ylabel('Free-Surface Elevation Change of Wave (m)', fontsize=12)
+    plt.title(f'Analytical vs Simulated Soliton Wave Free-Surface in the OSU LWF', fontsize=14)
+    plt.legend(fontsize=10,  title='Time', bbox_to_anchor=(1.0125, 1.0), loc="upper left" )#, ncol =len(t))
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
     plt.show()
@@ -154,13 +235,33 @@ def free_surface_error(x, y_analytical, y_numerical):
 
 
 wave_numerical = load_data()
-t = wave_numerical[0] #np.linspace(0, 10, 30)
-x = wave_numerical[1]#np.linspace(0, 90, len(wave_numerical[2]))
+t = wave_numerical[0] # np.linspace(0, 10, 30)
+x = wave_numerical[1] # np.linspace(0, 90, len(wave_numerical[2]))
 
 #print('Computing Analytical...')
-y_analytical = np.array([analytical_soliton(x, ti) for ti in t]).T
 
+# time_analytical = np.linspace(0, 10, 1000)
+x_analytical = np.linspace(0, 90, 1000)
+print("X Numerical Time-sets: ", len(x))
+y_analytical = []
+for i, ti in enumerate(t):
+    print("Time: ", ti)
+    print("i: ", i)
+    piston_start_time = 1.0
+    piston_motion_time = 2.5
+    
+    shifted_ti = ti -piston_start_time - piston_motion_time / 2 
+    ya = analytical_soliton(x_analytical, shifted_ti)
+    print("ya.shape: ", ya.shape)
+    y_analytical.append(ya)
+
+# print("X Analytical shape: ", x_analytical.shape)
+# print("Y Numerical List: ", y_analytical)
+
+y_analytical_list = np.asarray(y_analytical).T
+print("Y Analytical List: ", y_analytical_list.shape)
+print("Y Analytical List: ", y_analytical_list)
 #print('Plotting...')
-plot_free_surface(x, t, y_analytical, wave_numerical) # Graph Free Surface values
+plot_free_surface(t, x_analytical, y_analytical_list, wave_numerical) # Graph Free Surface values
 
 #free_surface_error(x, y_analytical, wave_numerical[2])
